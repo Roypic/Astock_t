@@ -8,6 +8,7 @@ import sys
 import threading
 import time
 import json
+import webbrowser
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -17,6 +18,7 @@ from notifier import PushPlusNotifier
 
 
 DEFAULT_INTERVAL_SECONDS = 30
+PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
 COLORS = {
     "bg": "#F6F3EC",
     "card": "#FFFDF7",
@@ -62,8 +64,8 @@ class MonitorApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("A股做T信号监控")
-        self.root.geometry("1060x720")
-        self.root.minsize(940, 620)
+        self.root.geometry("1060x780")
+        self.root.minsize(940, 680)
         self.root.configure(bg=COLORS["bg"])
 
         self.queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -164,6 +166,27 @@ class MonitorApp:
             font=("Microsoft YaHei UI", 9),
         )
         self.risk_label.grid(row=3, column=0, columnspan=4, sticky=tk.EW, pady=(8, 0))
+
+        help_frame = ttk.Frame(form, style="Soft.TFrame", padding=12)
+        help_frame.grid(row=4, column=0, columnspan=4, sticky=tk.EW, pady=(10, 0))
+        help_frame.columnconfigure(0, weight=1)
+        help_text = (
+            "PushPlus 使用：1. 打开 PushPlus 官网并用微信扫码登录；"
+            "2. 在「一对一推送」页面复制 token；"
+            "3. 粘贴到上方 token 输入框；"
+            "4. 点「测试推送」，手机微信收到测试消息后再点「开始监控」。"
+        )
+        tk.Label(
+            help_frame,
+            text=help_text,
+            bg=COLORS["card_soft"],
+            fg=COLORS["text"],
+            justify=tk.LEFT,
+            anchor=tk.W,
+            wraplength=780,
+            font=("Microsoft YaHei UI", 9),
+        ).grid(row=0, column=0, sticky=tk.EW)
+        ttk.Button(help_frame, text="打开 PushPlus", style="Ghost.TButton", command=self._open_pushplus).grid(row=0, column=1, padx=(12, 0))
 
         controls = ttk.Frame(outer)
         controls.pack(fill=tk.X, pady=(0, 12))
@@ -277,6 +300,9 @@ class MonitorApp:
         if path:
             self.model_path_var.set(path)
             self._refresh_risk_summary(Path(path))
+
+    def _open_pushplus(self) -> None:
+        webbrowser.open(PUSHPLUS_TOKEN_URL)
 
     def _choose_dir(self) -> None:
         path = filedialog.askdirectory(title="选择模型文件夹", initialdir=str(self.models_dir))
