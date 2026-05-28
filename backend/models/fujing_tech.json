@@ -1,0 +1,41 @@
+{
+  "name": "福晶科技",
+  "code": "002222.SZ",
+  "basket": [
+    {
+      "name": "水晶光电",
+      "code": "002273.SZ"
+    },
+    {
+      "name": "永新光学",
+      "code": "603297.XSHG"
+    },
+    {
+      "name": "联创电子",
+      "code": "002036.SZ"
+    },
+    {
+      "name": "腾景科技",
+      "code": "688195.XSHG"
+    },
+    {
+      "name": "茂莱光学",
+      "code": "688502.XSHG"
+    },
+    {
+      "name": "光迅科技",
+      "code": "002281.SZ"
+    }
+  ],
+  "params": {
+    "basket_threshold": 0.016,
+    "market_threshold": 0.006,
+    "relative_threshold": 0.003,
+    "avg_threshold": 0.006,
+    "take_profit": 0.024,
+    "stop_loss": 0.012,
+    "max_basket_dispersion": 0.045,
+    "volume_ratio_threshold": 0.0,
+    "max_daily_signals": 1
+  }
+}

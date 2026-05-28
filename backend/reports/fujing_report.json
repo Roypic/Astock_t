@@ -1,0 +1,134 @@
+{
+  "generated_at": "2026-05-28 20:27:30",
+  "entry_window": "09:30-15:00",
+  "latest_day": "2026-05-28",
+  "previous_day": "2026-05-27",
+  "baseline_train_start": "2026-04-13",
+  "baseline_train_end": "2026-05-27",
+  "updated_train_start": "2026-04-14",
+  "updated_train_end": "2026-05-28",
+  "models": {
+    "福晶科技": {
+      "code": "002222.SZ",
+      "baseline_params": {
+        "basket_threshold": 0.016,
+        "market_threshold": 0.006,
+        "relative_threshold": 0.003,
+        "avg_threshold": 0.006,
+        "take_profit": 0.024,
+        "stop_loss": 0.012,
+        "max_basket_dispersion": 0.045,
+        "volume_ratio_threshold": 0.0
+      },
+      "updated_params": {
+        "basket_threshold": 0.016,
+        "market_threshold": 0.006,
+        "relative_threshold": 0.003,
+        "avg_threshold": 0.006,
+        "take_profit": 0.024,
+        "stop_loss": 0.012,
+        "max_basket_dispersion": 0.045,
+        "volume_ratio_threshold": 0.0
+      },
+      "baseline_train": {
+        "n": 11,
+        "win_rate_pct": 54.55,
+        "avg_result_pct": 0.79,
+        "sum_result_pct": 8.72,
+        "max_drawdown_pct": -1.48,
+        "neg_residual_pct": -0.29,
+        "bad_tail_rate_pct": 27.27,
+        "target_rate_pct": 45.45
+      },
+      "baseline_on_latest_day": {
+        "n": 1,
+        "win_rate_pct": 0.0,
+        "avg_result_pct": -0.23,
+        "sum_result_pct": -0.23,
+        "max_drawdown_pct": -0.23,
+        "neg_residual_pct": -0.23,
+        "bad_tail_rate_pct": 0.0,
+        "target_rate_pct": 0.0
+      },
+      "updated_train": {
+        "n": 12,
+        "win_rate_pct": 50.0,
+        "avg_result_pct": 0.71,
+        "sum_result_pct": 8.49,
+        "max_drawdown_pct": -1.48,
+        "neg_residual_pct": -0.27,
+        "bad_tail_rate_pct": 25.0,
+        "target_rate_pct": 41.67
+      },
+      "baseline_previous_5d": {
+        "n": 2,
+        "win_rate_pct": 50.0,
+        "avg_result_pct": 0.6,
+        "sum_result_pct": 1.2,
+        "max_drawdown_pct": -1.2,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 50.0,
+        "target_rate_pct": 50.0
+      },
+      "updated_latest_5d": {
+        "n": 3,
+        "win_rate_pct": 33.33,
+        "avg_result_pct": 0.32,
+        "sum_result_pct": 0.97,
+        "max_drawdown_pct": -1.43,
+        "neg_residual_pct": -0.23,
+        "bad_tail_rate_pct": 33.33,
+        "target_rate_pct": 33.33
+      },
+      "old_params_on_updated_window": {
+        "n": 12,
+        "win_rate_pct": 50.0,
+        "avg_result_pct": 0.71,
+        "sum_result_pct": 8.49,
+        "max_drawdown_pct": -1.48,
+        "neg_residual_pct": -0.27,
+        "bad_tail_rate_pct": 25.0,
+        "target_rate_pct": 41.67
+      },
+      "new_params_on_baseline_window": {
+        "n": 11,
+        "win_rate_pct": 54.55,
+        "avg_result_pct": 0.79,
+        "sum_result_pct": 8.72,
+        "max_drawdown_pct": -1.48,
+        "neg_residual_pct": -0.29,
+        "bad_tail_rate_pct": 27.27,
+        "target_rate_pct": 45.45
+      },
+      "adopt_updated_params": true,
+      "adopt_reason": "参数未变化，维持当前稳定模型",
+      "final_params_source": "updated",
+      "final_params": {
+        "basket_threshold": 0.016,
+        "market_threshold": 0.006,
+        "relative_threshold": 0.003,
+        "avg_threshold": 0.006,
+        "take_profit": 0.024,
+        "stop_loss": 0.012,
+        "max_basket_dispersion": 0.045,
+        "volume_ratio_threshold": 0.0
+      },
+      "latest_day_trade_by_baseline": [
+        {
+          "day": "2026-05-28",
+          "minute": "13:29",
+          "entry": 108.09,
+          "exit_minute": "15:00",
+          "exit_kind": "close",
+          "result": -0.0023128874086409956,
+          "residual": -0.0023128874086409956,
+          "basket_return": 0.016631517794231998,
+          "market_return": 0.006449422580925068,
+          "relative_return": 0.0428666198258425,
+          "basket_dispersion": 0.0226254034635494,
+          "volume_ratio": 0.8015031260198604
+        }
+      ]
+    }
+  }
+}

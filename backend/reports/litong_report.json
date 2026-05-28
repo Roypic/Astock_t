@@ -1,0 +1,134 @@
+{
+  "generated_at": "2026-05-28 20:30:11",
+  "entry_window": "09:30-15:00",
+  "latest_day": "2026-05-28",
+  "previous_day": "2026-05-27",
+  "baseline_train_start": "2026-04-13",
+  "baseline_train_end": "2026-05-27",
+  "updated_train_start": "2026-04-14",
+  "updated_train_end": "2026-05-28",
+  "models": {
+    "利通电子": {
+      "code": "603629.XSHG",
+      "baseline_params": {
+        "basket_threshold": 0.016,
+        "market_threshold": 0.003,
+        "relative_threshold": 0.003,
+        "avg_threshold": 0.006,
+        "take_profit": 0.024,
+        "stop_loss": 0.012,
+        "max_basket_dispersion": 0.045,
+        "volume_ratio_threshold": 0.0
+      },
+      "updated_params": {
+        "basket_threshold": 0.016,
+        "market_threshold": 0.003,
+        "relative_threshold": 0.003,
+        "avg_threshold": 0.006,
+        "take_profit": 0.024,
+        "stop_loss": 0.012,
+        "max_basket_dispersion": 0.045,
+        "volume_ratio_threshold": 1.1
+      },
+      "baseline_train": {
+        "n": 8,
+        "win_rate_pct": 37.5,
+        "avg_result_pct": 0.3,
+        "sum_result_pct": 2.4,
+        "max_drawdown_pct": -2.4,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 50.0,
+        "target_rate_pct": 37.5
+      },
+      "baseline_on_latest_day": {
+        "n": 1,
+        "win_rate_pct": 0.0,
+        "avg_result_pct": -0.03,
+        "sum_result_pct": -0.03,
+        "max_drawdown_pct": -0.03,
+        "neg_residual_pct": -0.03,
+        "bad_tail_rate_pct": 0.0,
+        "target_rate_pct": 0.0
+      },
+      "updated_train": {
+        "n": 5,
+        "win_rate_pct": 60.0,
+        "avg_result_pct": 0.84,
+        "sum_result_pct": 4.21,
+        "max_drawdown_pct": -1.31,
+        "neg_residual_pct": -0.11,
+        "bad_tail_rate_pct": 20.0,
+        "target_rate_pct": 40.0
+      },
+      "baseline_previous_5d": {
+        "n": 1,
+        "win_rate_pct": 0.0,
+        "avg_result_pct": -1.2,
+        "sum_result_pct": -1.2,
+        "max_drawdown_pct": -1.2,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 100.0,
+        "target_rate_pct": 0.0
+      },
+      "updated_latest_5d": {
+        "n": 1,
+        "win_rate_pct": 0.0,
+        "avg_result_pct": -0.11,
+        "sum_result_pct": -0.11,
+        "max_drawdown_pct": -0.11,
+        "neg_residual_pct": -0.11,
+        "bad_tail_rate_pct": 0.0,
+        "target_rate_pct": 0.0
+      },
+      "old_params_on_updated_window": {
+        "n": 8,
+        "win_rate_pct": 37.5,
+        "avg_result_pct": 0.45,
+        "sum_result_pct": 3.57,
+        "max_drawdown_pct": -1.23,
+        "neg_residual_pct": -0.03,
+        "bad_tail_rate_pct": 37.5,
+        "target_rate_pct": 37.5
+      },
+      "new_params_on_baseline_window": {
+        "n": 4,
+        "win_rate_pct": 75.0,
+        "avg_result_pct": 1.08,
+        "sum_result_pct": 4.33,
+        "max_drawdown_pct": -1.2,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 25.0,
+        "target_rate_pct": 50.0
+      },
+      "adopt_updated_params": true,
+      "adopt_reason": "新参数通过稳定性门槛",
+      "final_params_source": "updated",
+      "final_params": {
+        "basket_threshold": 0.016,
+        "market_threshold": 0.003,
+        "relative_threshold": 0.003,
+        "avg_threshold": 0.006,
+        "take_profit": 0.024,
+        "stop_loss": 0.012,
+        "max_basket_dispersion": 0.045,
+        "volume_ratio_threshold": 1.1
+      },
+      "latest_day_trade_by_baseline": [
+        {
+          "day": "2026-05-28",
+          "minute": "13:46",
+          "entry": 220.09,
+          "exit_minute": "15:00",
+          "exit_kind": "close",
+          "result": -0.00027261574810311107,
+          "residual": -0.00027261574810311107,
+          "basket_return": 0.01609983100447243,
+          "market_return": 0.012150454509233665,
+          "relative_return": 0.0196178160543512,
+          "basket_dispersion": 0.034582141975712584,
+          "volume_ratio": 0.5217829418851138
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "name": "利通电子",
+  "code": "603629.XSHG",
+  "basket": [
+    {
+      "name": "东山精密",
+      "code": "002384.SZ"
+    },
+    {
+      "name": "沪电股份",
+      "code": "002463.SZ"
+    },
+    {
+      "name": "胜宏科技",
+      "code": "300476.SZ"
+    },
+    {
+      "name": "景旺电子",
+      "code": "603228.XSHG"
+    },
+    {
+      "name": "世运电路",
+      "code": "603920.XSHG"
+    },
+    {
+      "name": "生益电子",
+      "code": "688183.XSHG"
+    }
+  ],
+  "params": {
+    "basket_threshold": 0.016,
+    "market_threshold": 0.003,
+    "relative_threshold": 0.003,
+    "avg_threshold": 0.006,
+    "take_profit": 0.024,
+    "stop_loss": 0.012,
+    "max_basket_dispersion": 0.045,
+    "volume_ratio_threshold": 1.1,
+    "max_daily_signals": 1
+  }
+}
