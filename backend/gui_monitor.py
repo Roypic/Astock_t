@@ -15,6 +15,21 @@ from notifier import PushPlusNotifier
 
 
 DEFAULT_INTERVAL_SECONDS = 30
+COLORS = {
+    "bg": "#F6F3EC",
+    "card": "#FFFDF7",
+    "card_soft": "#FDF8EE",
+    "text": "#2F3834",
+    "muted": "#748079",
+    "line": "#E7DDCF",
+    "sage": "#6E927C",
+    "sage_dark": "#527261",
+    "coral": "#D87A68",
+    "coral_dark": "#BE6352",
+    "mint": "#DDECE3",
+    "cream": "#FFF7DF",
+    "danger": "#B45C5C",
+}
 
 
 def app_dir() -> Path:
@@ -45,8 +60,9 @@ class MonitorApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("A股做T信号监控")
-        self.root.geometry("980x640")
-        self.root.minsize(860, 560)
+        self.root.geometry("1060x720")
+        self.root.minsize(940, 620)
+        self.root.configure(bg=COLORS["bg"])
 
         self.queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.stop_event = threading.Event()
@@ -58,36 +74,77 @@ class MonitorApp:
         self.interval_var = tk.StringVar(value=str(DEFAULT_INTERVAL_SECONDS))
         self.status_var = tk.StringVar(value="未启动")
 
+        self._configure_style()
         self._build_ui()
         self.root.after(300, self._drain_queue)
 
+    def _configure_style(self) -> None:
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure(".", font=("Microsoft YaHei UI", 10), background=COLORS["bg"], foreground=COLORS["text"])
+        style.configure("Card.TFrame", background=COLORS["card"], relief="flat")
+        style.configure("Soft.TFrame", background=COLORS["card_soft"], relief="flat")
+        style.configure("Muted.TLabel", background=COLORS["card"], foreground=COLORS["muted"])
+        style.configure("Title.TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=("Microsoft YaHei UI", 22, "bold"))
+        style.configure("Subtitle.TLabel", background=COLORS["bg"], foreground=COLORS["muted"], font=("Microsoft YaHei UI", 10))
+        style.configure("CardTitle.TLabel", background=COLORS["card"], foreground=COLORS["text"], font=("Microsoft YaHei UI", 12, "bold"))
+        style.configure("TEntry", fieldbackground="#FFFFFF", bordercolor=COLORS["line"], lightcolor=COLORS["line"], darkcolor=COLORS["line"], padding=8)
+        style.configure("Primary.TButton", background=COLORS["sage"], foreground="#FFFFFF", bordercolor=COLORS["sage"], focusthickness=0, padding=(14, 9), font=("Microsoft YaHei UI", 10, "bold"))
+        style.map("Primary.TButton", background=[("active", COLORS["sage_dark"]), ("disabled", COLORS["line"])])
+        style.configure("Warm.TButton", background=COLORS["coral"], foreground="#FFFFFF", bordercolor=COLORS["coral"], focusthickness=0, padding=(14, 9), font=("Microsoft YaHei UI", 10, "bold"))
+        style.map("Warm.TButton", background=[("active", COLORS["coral_dark"]), ("disabled", COLORS["line"])])
+        style.configure("Ghost.TButton", background=COLORS["card_soft"], foreground=COLORS["text"], bordercolor=COLORS["line"], focusthickness=0, padding=(12, 8))
+        style.map("Ghost.TButton", background=[("active", COLORS["mint"])])
+        style.configure("Treeview", background="#FFFDF7", fieldbackground="#FFFDF7", foreground=COLORS["text"], rowheight=34, bordercolor=COLORS["line"], lightcolor=COLORS["line"], darkcolor=COLORS["line"])
+        style.configure("Treeview.Heading", background=COLORS["mint"], foreground=COLORS["text"], relief="flat", padding=(8, 8), font=("Microsoft YaHei UI", 10, "bold"))
+        style.map("Treeview", background=[("selected", COLORS["sage"])], foreground=[("selected", "#FFFFFF")])
+
     def _build_ui(self) -> None:
-        outer = ttk.Frame(self.root, padding=12)
+        outer = ttk.Frame(self.root, padding=18)
         outer.pack(fill=tk.BOTH, expand=True)
 
-        form = ttk.LabelFrame(outer, text="配置")
-        form.pack(fill=tk.X)
+        header = ttk.Frame(outer)
+        header.pack(fill=tk.X, pady=(0, 14))
+        ttk.Label(header, text="A股做T信号监控", style="Title.TLabel").pack(anchor=tk.W)
+        ttk.Label(header, text="模型驱动的盘中提醒，界面观察 + 微信推送", style="Subtitle.TLabel").pack(anchor=tk.W, pady=(4, 0))
+
+        form = ttk.Frame(outer, style="Card.TFrame", padding=16)
+        form.pack(fill=tk.X, pady=(0, 12))
         form.columnconfigure(1, weight=1)
 
-        ttk.Label(form, text="模型文件/文件夹").grid(row=0, column=0, sticky=tk.W, padx=8, pady=8)
-        ttk.Entry(form, textvariable=self.model_path_var).grid(row=0, column=1, sticky=tk.EW, padx=8, pady=8)
-        ttk.Button(form, text="选择文件", command=self._choose_file).grid(row=0, column=2, padx=4, pady=8)
-        ttk.Button(form, text="选择文件夹", command=self._choose_dir).grid(row=0, column=3, padx=8, pady=8)
+        ttk.Label(form, text="配置", style="CardTitle.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 12), pady=(0, 10))
+        self.status_badge = tk.Label(
+            form,
+            textvariable=self.status_var,
+            bg=COLORS["cream"],
+            fg=COLORS["sage_dark"],
+            padx=12,
+            pady=5,
+            font=("Microsoft YaHei UI", 9, "bold"),
+        )
+        self.status_badge.grid(row=0, column=3, sticky=tk.E, pady=(0, 10))
 
-        ttk.Label(form, text="PushPlus token").grid(row=1, column=0, sticky=tk.W, padx=8, pady=8)
-        ttk.Entry(form, textvariable=self.token_var, show="*").grid(row=1, column=1, sticky=tk.EW, padx=8, pady=8)
-        ttk.Label(form, text="间隔秒").grid(row=1, column=2, sticky=tk.E, padx=4, pady=8)
-        ttk.Entry(form, textvariable=self.interval_var, width=8).grid(row=1, column=3, sticky=tk.W, padx=8, pady=8)
+        ttk.Label(form, text="模型文件/文件夹", style="Muted.TLabel").grid(row=1, column=0, sticky=tk.W, padx=(0, 12), pady=7)
+        ttk.Entry(form, textvariable=self.model_path_var).grid(row=1, column=1, sticky=tk.EW, padx=(0, 8), pady=7)
+        ttk.Button(form, text="选择文件", style="Ghost.TButton", command=self._choose_file).grid(row=1, column=2, padx=4, pady=7)
+        ttk.Button(form, text="选择文件夹", style="Ghost.TButton", command=self._choose_dir).grid(row=1, column=3, padx=(4, 0), pady=7)
+
+        ttk.Label(form, text="PushPlus token", style="Muted.TLabel").grid(row=2, column=0, sticky=tk.W, padx=(0, 12), pady=7)
+        ttk.Entry(form, textvariable=self.token_var, show="*").grid(row=2, column=1, sticky=tk.EW, padx=(0, 8), pady=7)
+        ttk.Label(form, text="间隔秒", style="Muted.TLabel").grid(row=2, column=2, sticky=tk.E, padx=4, pady=7)
+        ttk.Entry(form, textvariable=self.interval_var, width=8).grid(row=2, column=3, sticky=tk.W, padx=(8, 0), pady=7)
 
         controls = ttk.Frame(outer)
-        controls.pack(fill=tk.X, pady=(10, 8))
-        ttk.Button(controls, text="测试推送", command=self._test_push).pack(side=tk.LEFT)
-        ttk.Button(controls, text="开始监控", command=self._start).pack(side=tk.LEFT, padx=8)
-        ttk.Button(controls, text="停止", command=self._stop).pack(side=tk.LEFT)
-        ttk.Label(controls, textvariable=self.status_var).pack(side=tk.RIGHT)
+        controls.pack(fill=tk.X, pady=(0, 12))
+        ttk.Button(controls, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
+        ttk.Button(controls, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=8)
+        ttk.Button(controls, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
 
         columns = ("symbol", "code", "status", "price", "minute", "score", "message")
-        self.table = ttk.Treeview(outer, columns=columns, show="headings", height=11)
+        table_card = ttk.Frame(outer, style="Card.TFrame", padding=12)
+        table_card.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
+        ttk.Label(table_card, text="监控列表", style="CardTitle.TLabel").pack(anchor=tk.W, pady=(0, 8))
+        self.table = ttk.Treeview(table_card, columns=columns, show="headings", height=10)
         headings = {
             "symbol": "股票",
             "code": "代码",
@@ -101,12 +158,28 @@ class MonitorApp:
         for col in columns:
             self.table.heading(col, text=headings[col])
             self.table.column(col, width=widths[col], anchor=tk.W)
-        self.table.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        self.table.tag_configure("even", background="#FFFDF7")
+        self.table.tag_configure("odd", background="#F8F1E6")
+        self.table.tag_configure("signal", background="#FBE3DA", foreground=COLORS["coral_dark"])
+        self.table.tag_configure("error", background="#F5DDDD", foreground=COLORS["danger"])
+        self.table.pack(fill=tk.BOTH, expand=True)
 
-        log_frame = ttk.LabelFrame(outer, text="运行日志 / 信号")
+        log_frame = ttk.Frame(outer, style="Card.TFrame", padding=12)
         log_frame.pack(fill=tk.BOTH, expand=True)
-        self.log = tk.Text(log_frame, height=10, wrap=tk.WORD)
-        self.log.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        ttk.Label(log_frame, text="运行日志 / 信号", style="CardTitle.TLabel").pack(anchor=tk.W, pady=(0, 8))
+        self.log = tk.Text(
+            log_frame,
+            height=9,
+            wrap=tk.WORD,
+            bg="#2F3834",
+            fg="#F9F4E8",
+            insertbackground="#F9F4E8",
+            relief=tk.FLAT,
+            padx=12,
+            pady=10,
+            font=("Cascadia Mono", 10),
+        )
+        self.log.pack(fill=tk.BOTH, expand=True)
 
     def _choose_file(self) -> None:
         path = filedialog.askopenfilename(
@@ -161,11 +234,13 @@ class MonitorApp:
         )
         self.worker.start()
         self.status_var.set("运行中")
+        self.status_badge.configure(bg=COLORS["mint"], fg=COLORS["sage_dark"])
         self._log("监控已启动")
 
     def _stop(self) -> None:
         self.stop_event.set()
         self.status_var.set("停止中")
+        self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["coral_dark"])
         self._log("正在停止监控")
 
     def _run_worker(self, model_path: Path, token: str, interval: int) -> None:
@@ -196,9 +271,11 @@ class MonitorApp:
                 self._log(str(payload))
             elif kind == "error":
                 self.status_var.set("错误")
+                self.status_badge.configure(bg="#F5DDDD", fg=COLORS["danger"])
                 messagebox.showerror("启动失败", str(payload))
             elif kind == "stopped":
                 self.status_var.set("已停止")
+                self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["muted"])
             elif kind == "result":
                 self._render_result(payload)  # type: ignore[arg-type]
         self.root.after(300, self._drain_queue)
@@ -208,10 +285,13 @@ class MonitorApp:
         items = result.get("items", [])
         alerts = result.get("alerts", [])
         self.status_var.set(f"最近检查：{checked_at}")
+        self.status_badge.configure(bg=COLORS["mint"], fg=COLORS["sage_dark"])
         self.table.delete(*self.table.get_children())
-        for item in items if isinstance(items, list) else []:
+        for index, item in enumerate(items if isinstance(items, list) else []):
             if not isinstance(item, dict):
                 continue
+            status = str(item.get("status", "-"))
+            tag = "signal" if status == "signal" else "error" if status == "error" else "even" if index % 2 == 0 else "odd"
             self.table.insert(
                 "",
                 tk.END,
@@ -224,6 +304,7 @@ class MonitorApp:
                     item.get("signal_score", "-"),
                     item.get("message", "-"),
                 ),
+                tags=(tag,),
             )
         self._log(f"[{checked_at}] 检查完成，新信号 {len(alerts) if isinstance(alerts, list) else 0} 个")
         if isinstance(alerts, list):
