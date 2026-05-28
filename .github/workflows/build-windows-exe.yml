@@ -31,9 +31,11 @@ jobs:
         run: >
           python -m PyInstaller
           --onefile
+          --windowed
           --name AShareTSignalMonitor
+          --add-data "models;models"
           --clean
-          desktop_monitor.py
+          gui_monitor.py
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
@@ -47,8 +49,9 @@ jobs:
         with:
           tag_name: windows-latest
           name: Windows Latest
-          body: "Latest Windows build of AShareTSignalMonitor.exe."
+          body: "Latest Windows GUI build of AShareTSignalMonitor.exe."
           files: backend/dist/AShareTSignalMonitor.exe
           make_latest: true
           prerelease: false
           fail_on_unmatched_files: true
+          overwrite_files: true
