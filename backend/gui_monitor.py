@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import queue
+import random
 import shutil
 import sys
 import threading
@@ -68,6 +69,12 @@ class MonitorApp:
         self.stop_event = threading.Event()
         self.worker: threading.Thread | None = None
         self.models_dir = ensure_default_models()
+        self.mascot_x = 86
+        self.mascot_start_x = 86
+        self.mascot_target_x = 86
+        self.mascot_jump_frame = 0
+        self.mascot_jump_frames = 0
+        self.mascot_idle_step = 0
 
         self.token_var = tk.StringVar()
         self.model_path_var = tk.StringVar(value=str(self.models_dir))
@@ -105,8 +112,15 @@ class MonitorApp:
 
         header = ttk.Frame(outer)
         header.pack(fill=tk.X, pady=(0, 14))
-        ttk.Label(header, text="A股做T信号监控", style="Title.TLabel").pack(anchor=tk.W)
-        ttk.Label(header, text="模型驱动的盘中提醒，界面观察 + 微信推送", style="Subtitle.TLabel").pack(anchor=tk.W, pady=(4, 0))
+        header.columnconfigure(0, weight=1)
+        title_block = ttk.Frame(header)
+        title_block.grid(row=0, column=0, sticky=tk.W)
+        ttk.Label(title_block, text="A股做T信号监控", style="Title.TLabel").pack(anchor=tk.W)
+        ttk.Label(title_block, text="模型驱动的盘中提醒，界面观察 + 微信推送", style="Subtitle.TLabel").pack(anchor=tk.W, pady=(4, 0))
+        self.mascot = tk.Canvas(header, width=170, height=92, bg=COLORS["bg"], highlightthickness=0, cursor="hand2")
+        self.mascot.grid(row=0, column=1, sticky=tk.E)
+        self.mascot.bind("<Button-1>", self._mascot_jump_away)
+        self._animate_mascot()
 
         form = ttk.Frame(outer, style="Card.TFrame", padding=16)
         form.pack(fill=tk.X, pady=(0, 12))
@@ -180,6 +194,62 @@ class MonitorApp:
             font=("Cascadia Mono", 10),
         )
         self.log.pack(fill=tk.BOTH, expand=True)
+
+    def _animate_mascot(self) -> None:
+        if not hasattr(self, "mascot"):
+            return
+        if self.mascot_jump_frames:
+            progress = self.mascot_jump_frame / self.mascot_jump_frames
+            self.mascot_x = self.mascot_start_x + (self.mascot_target_x - self.mascot_start_x) * progress
+            y_offset = -34 * (1 - (2 * progress - 1) ** 2)
+            self.mascot_jump_frame += 1
+            if self.mascot_jump_frame > self.mascot_jump_frames:
+                self.mascot_jump_frames = 0
+                self.mascot_x = self.mascot_target_x
+        else:
+            self.mascot_idle_step = (self.mascot_idle_step + 1) % 40
+            y_offset = -4 if self.mascot_idle_step < 20 else 0
+        self._draw_mascot(self.mascot_x, 62 + y_offset)
+        self.root.after(90, self._animate_mascot)
+
+    def _mascot_jump_away(self, _event: tk.Event) -> None:
+        self.mascot_start_x = self.mascot_x
+        candidates = [42, 86, 128]
+        far_choices = [x for x in candidates if abs(x - self.mascot_x) > 24]
+        self.mascot_target_x = random.choice(far_choices or candidates)
+        self.mascot_jump_frame = 0
+        self.mascot_jump_frames = 18
+        self._log("小伙伴跳开了，继续陪你盯盘")
+
+    def _draw_mascot(self, x: float, y: float) -> None:
+        c = self.mascot
+        c.delete("mascot")
+        body = "#9DB7A7"
+        body_dark = "#779887"
+        belly = "#F8E9D0"
+        ink = "#2F3834"
+        blush = "#E8A39A"
+        c.create_oval(x - 34, 79, x + 34, 88, fill="#E8DDCF", outline="", tags="mascot")
+        c.create_oval(x - 35, y - 42, x + 35, y + 20, fill=body, outline=body_dark, width=2, tags="mascot")
+        c.create_oval(x - 48, y - 55, x - 18, y - 22, fill=body, outline=body_dark, width=2, tags="mascot")
+        c.create_oval(x + 18, y - 55, x + 48, y - 22, fill=body, outline=body_dark, width=2, tags="mascot")
+        c.create_oval(x - 26, y - 12, x + 26, y + 22, fill=belly, outline="#E7D3B6", width=1, tags="mascot")
+        c.create_oval(x - 16, y - 24, x - 9, y - 17, fill=ink, outline="", tags="mascot")
+        c.create_oval(x + 9, y - 24, x + 16, y - 17, fill=ink, outline="", tags="mascot")
+        c.create_oval(x - 14, y - 22, x - 12, y - 20, fill="#FFFFFF", outline="", tags="mascot")
+        c.create_oval(x + 11, y - 22, x + 13, y - 20, fill="#FFFFFF", outline="", tags="mascot")
+        c.create_oval(x - 4, y - 15, x + 4, y - 8, fill=ink, outline="", tags="mascot")
+        c.create_arc(x - 9, y - 12, x, y - 2, start=220, extent=100, style=tk.ARC, outline=ink, width=2, tags="mascot")
+        c.create_arc(x, y - 12, x + 9, y - 2, start=220, extent=100, style=tk.ARC, outline=ink, width=2, tags="mascot")
+        c.create_oval(x - 28, y - 12, x - 18, y - 4, fill=blush, outline="", tags="mascot")
+        c.create_oval(x + 18, y - 12, x + 28, y - 4, fill=blush, outline="", tags="mascot")
+        for offset in (-4, 1, 6):
+            c.create_line(x - 10, y - 9 + offset, x - 30, y - 13 + offset, fill=ink, width=1, tags="mascot")
+            c.create_line(x + 10, y - 9 + offset, x + 30, y - 13 + offset, fill=ink, width=1, tags="mascot")
+        c.create_line(x - 13, y + 3, x - 5, y + 9, x - 13, y + 14, fill=body_dark, smooth=True, width=2, tags="mascot")
+        c.create_line(x + 13, y + 3, x + 5, y + 9, x + 13, y + 14, fill=body_dark, smooth=True, width=2, tags="mascot")
+        c.create_oval(x + 24, y - 48, x + 34, y - 38, fill="#B9D6A6", outline="#88A979", width=1, tags="mascot")
+        c.create_line(x + 24, y - 39, x + 31, y - 50, fill="#88A979", width=1, tags="mascot")
 
     def _choose_file(self) -> None:
         path = filedialog.askopenfilename(
