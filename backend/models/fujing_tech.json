@@ -36,6 +36,7 @@
     "stop_loss": 0.012,
     "max_basket_dispersion": 0.045,
     "volume_ratio_threshold": 0.0,
-    "max_daily_signals": 1
+    "max_daily_signals": 1,
+    "trade_sides": "buy"
   }
 }

@@ -141,38 +141,67 @@ def simulate_day(
         bret, bdisp = bstats
         rel = own_return - bret
         above_avg = current["price"] > current["avg_price"] * (1 + params["avg_threshold"])
+        below_avg = current["price"] < current["avg_price"] * (1 - params["avg_threshold"])
         vr = volume_ratio(rows, i)
-        if not (
-            bret > params["basket_threshold"]
+        sides = str(params.get("trade_sides", getattr(model, "trade_sides", "buy")))
+        buy_signal = (
+            sides in ("both", "buy")
+            and bret > params["basket_threshold"]
             and mret > params["market_threshold"]
             and rel >= params["relative_threshold"]
             and bdisp <= params["max_basket_dispersion"]
             and above_avg
             and vr >= params.get("volume_ratio_threshold", 0.0)
-        ):
+        )
+        sell_signal = (
+            sides in ("both", "sell")
+            and bret < -params["basket_threshold"]
+            and mret < -params["market_threshold"]
+            and rel <= -params["relative_threshold"]
+            and bdisp <= params["max_basket_dispersion"]
+            and below_avg
+            and vr >= params.get("volume_ratio_threshold", 0.0)
+        )
+        if not (buy_signal or sell_signal):
             continue
 
+        action = "BUY_T" if buy_signal else "SELL_T"
         entry = current["price"]
-        target = entry * (1 + params["take_profit"])
-        stop = entry * (1 - params["stop_loss"])
+        if action == "SELL_T":
+            target = entry * (1 - params["take_profit"])
+            stop = entry * (1 + params["stop_loss"])
+        else:
+            target = entry * (1 + params["take_profit"])
+            stop = entry * (1 - params["stop_loss"])
         exit_kind = "close"
         exit_price = rows[-1]["price"]
         exit_minute = rows[-1]["minute"]
         for future in rows[i + 1 :]:
-            if future["price"] >= target:
+            if action == "BUY_T" and future["price"] >= target:
                 exit_kind = "target"
                 exit_price = target
                 exit_minute = future["minute"]
                 break
-            if future["price"] <= stop:
+            if action == "BUY_T" and future["price"] <= stop:
                 exit_kind = "stop"
                 exit_price = stop
                 exit_minute = future["minute"]
                 break
-        result = exit_price / entry - 1
+            if action == "SELL_T" and future["price"] <= target:
+                exit_kind = "target"
+                exit_price = target
+                exit_minute = future["minute"]
+                break
+            if action == "SELL_T" and future["price"] >= stop:
+                exit_kind = "stop"
+                exit_price = stop
+                exit_minute = future["minute"]
+                break
+        result = exit_price / entry - 1 if action == "BUY_T" else entry / exit_price - 1
         return {
             "day": day,
             "minute": minute,
+            "action": action,
             "entry": entry,
             "exit_minute": exit_minute,
             "exit_kind": exit_kind,
@@ -198,6 +227,8 @@ def metrics(trades: list[dict[str, Any]]) -> dict[str, float | int]:
             "neg_residual": 0.0,
             "bad_tail_rate": 0.0,
             "target_rate": 0.0,
+            "buy_count": 0,
+            "sell_count": 0,
         }
     results = [t["result"] for t in trades]
     equity = 0.0
@@ -217,6 +248,8 @@ def metrics(trades: list[dict[str, Any]]) -> dict[str, float | int]:
         "neg_residual": statistics.mean(residuals) if residuals else 0.0,
         "bad_tail_rate": sum(1 for r in results if r <= -0.01) / len(results),
         "target_rate": sum(1 for t in trades if t["exit_kind"] == "target") / len(trades),
+        "buy_count": sum(1 for t in trades if t.get("action") == "BUY_T"),
+        "sell_count": sum(1 for t in trades if t.get("action") == "SELL_T"),
     }
 
 
@@ -245,9 +278,10 @@ def param_grid(base: TModel) -> list[dict[str, float]]:
     stops = sorted(set([base.stop_loss, 0.012]))
     dispersions = sorted(set([base.max_basket_dispersion, 0.045]))
     volume_thresholds = sorted(set([0.0, base.volume_ratio_threshold, 1.1, 1.3]))
+    trade_sides = sorted(set([base.trade_sides, "both", "sell"]))
     grid = []
-    for basket, market, rel, avg, tp, stop, disp, vol in product(
-        baskets, markets, relatives, avgs, tps, stops, dispersions, volume_thresholds
+    for basket, market, rel, avg, tp, stop, disp, vol, sides in product(
+        baskets, markets, relatives, avgs, tps, stops, dispersions, volume_thresholds, trade_sides
     ):
         if tp < 0.016:
             continue
@@ -261,6 +295,7 @@ def param_grid(base: TModel) -> list[dict[str, float]]:
                 "stop_loss": round(stop, 5),
                 "max_basket_dispersion": round(disp, 5),
                 "volume_ratio_threshold": round(vol, 5),
+                "trade_sides": sides,
             }
         )
     return grid
@@ -336,6 +371,8 @@ def summarize_metrics(m: dict[str, float | int]) -> dict[str, Any]:
         "neg_residual_pct": pct(m["neg_residual"]),
         "bad_tail_rate_pct": pct(m["bad_tail_rate"]),
         "target_rate_pct": pct(m["target_rate"]),
+        "buy_count": m["buy_count"],
+        "sell_count": m["sell_count"],
     }
 
 
