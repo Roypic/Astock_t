@@ -1,0 +1,52 @@
+name: Rolling Optimize Models
+
+on:
+  schedule:
+    - cron: "45 8 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run rolling optimizer
+        working-directory: backend
+        run: >
+          python -u rolling_optimize.py
+          --models models
+          --since "TRADE_DAYS_AGO(31)"
+          --train-days 30
+          --write-models
+          --out reports/rolling_optimize_report.json
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: rolling-optimize-report
+          path: backend/reports/rolling_optimize_report.json
+
+      - name: Commit model updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/models backend/reports/rolling_optimize_report.json
+          if git diff --cached --quiet; then
+            echo "No model changes."
+          else
+            git commit -m "Update rolling strategy models"
+            git push
+          fi

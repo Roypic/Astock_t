@@ -2,16 +2,34 @@
   "name": "东山精密",
   "code": "002384.SZ",
   "basket": [
-    {"name": "源杰科技", "code": "688498.XSHG"},
-    {"name": "仕佳光子", "code": "688313.XSHG"},
-    {"name": "剑桥科技", "code": "603083.XSHG"},
-    {"name": "永鼎股份", "code": "600105.XSHG"},
-    {"name": "博创科技", "code": "300548.SZ"},
-    {"name": "长光华芯", "code": "688048.XSHG"}
+    {
+      "name": "源杰科技",
+      "code": "688498.XSHG"
+    },
+    {
+      "name": "仕佳光子",
+      "code": "688313.XSHG"
+    },
+    {
+      "name": "剑桥科技",
+      "code": "603083.XSHG"
+    },
+    {
+      "name": "永鼎股份",
+      "code": "600105.XSHG"
+    },
+    {
+      "name": "博创科技",
+      "code": "300548.SZ"
+    },
+    {
+      "name": "长光华芯",
+      "code": "688048.XSHG"
+    }
   ],
   "params": {
-    "basket_threshold": 0.016,
-    "market_threshold": 0.006,
+    "basket_threshold": 0.02,
+    "market_threshold": 0.009,
     "relative_threshold": 0.006,
     "avg_threshold": 0.006,
     "take_profit": 0.024,

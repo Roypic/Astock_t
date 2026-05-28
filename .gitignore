@@ -9,3 +9,4 @@ logs/
 worker.pid
 .env
 *.log
+.cache/

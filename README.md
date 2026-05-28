@@ -8,7 +8,7 @@
 - 默认带剑桥科技、东山精密两个模型。
 - 模型文件夹里放几个 `.json` 模型，就监控几只股票。
 - 使用 FTShare / `market.ft.tech` 分钟行情。
-- 只在北京时间 `09:45-10:30`、`14:00-14:30` 检查入场信号。
+- 默认在北京时间 `09:30-15:00` 的盘中分钟数据里检查入场信号。
 - 检测到信号后通过 PushPlus 推送到微信。
 - 信号也会显示在 exe 界面表格和日志里。
 - 不保存 PushPlus token；每次启动在界面输入。
@@ -83,6 +83,26 @@ backend\dist\AShareTSignalMonitor.exe
   }
 }
 ```
+
+## 滚动优化
+
+仓库包含每日滚动优化脚本：
+
+```bash
+cd backend
+python -u rolling_optimize.py --models models --since "TRADE_DAYS_AGO(31)" --train-days 30 --write-models
+```
+
+工作流：
+
+```text
+昨日收盘往前 30 个交易日训练基准
+加入今日收盘后再训练更新参数
+交叉回放两段窗口
+只有新参数通过稳定性门槛才写回模型 JSON
+```
+
+GitHub Actions 会在北京时间收盘后自动运行 `Rolling Optimize Models`。
 
 ## 免责声明
 
