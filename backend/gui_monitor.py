@@ -194,7 +194,7 @@ class MonitorApp:
         ttk.Button(controls, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=8)
         ttk.Button(controls, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
 
-        columns = ("symbol", "code", "status", "price", "minute", "score", "message")
+        columns = ("symbol", "code", "status", "price", "target", "stop", "minute", "score", "message")
         table_card = ttk.Frame(outer, style="Card.TFrame", padding=12)
         table_card.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
         ttk.Label(table_card, text="监控列表", style="CardTitle.TLabel").pack(anchor=tk.W, pady=(0, 8))
@@ -204,11 +204,23 @@ class MonitorApp:
             "code": "代码",
             "status": "状态",
             "price": "现价",
+            "target": "目标价",
+            "stop": "止损价",
             "minute": "时间",
             "score": "评分",
             "message": "说明",
         }
-        widths = {"symbol": 110, "code": 120, "status": 90, "price": 80, "minute": 80, "score": 70, "message": 360}
+        widths = {
+            "symbol": 100,
+            "code": 112,
+            "status": 82,
+            "price": 72,
+            "target": 76,
+            "stop": 76,
+            "minute": 70,
+            "score": 64,
+            "message": 330,
+        }
         for col in columns:
             self.table.heading(col, text=headings[col])
             self.table.column(col, width=widths[col], anchor=tk.W)
@@ -449,6 +461,8 @@ class MonitorApp:
                     item.get("code", "-"),
                     item.get("status", "-"),
                     item.get("last_price", "-"),
+                    item.get("exit_price", "-"),
+                    item.get("stop_price", "-"),
                     item.get("minute", "-"),
                     item.get("signal_score", "-"),
                     item.get("message", "-"),

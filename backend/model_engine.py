@@ -28,6 +28,11 @@ DEFAULT_ENTRY_WINDOWS = (
     ("盘中", "09:30", "15:00"),
 )
 
+TRADING_SESSIONS = (
+    ("09:30", "11:30"),
+    ("13:00", "15:00"),
+)
+
 
 @dataclass(frozen=True)
 class Security:
@@ -209,6 +214,9 @@ class ModelSignalEngine:
             return self._snapshot(model, None, "waiting", "分时数据不足")
 
         current = own[-1]
+        if not self._is_live_trading_time(current.day):
+            return self._snapshot(model, current, "idle", "休市或收盘后，仅显示最后行情，不推送信号")
+
         window_name = self._entry_window(current.minute)
         if window_name is None:
             return self._snapshot(model, current, "idle", "不在入场提醒时间窗")
@@ -289,6 +297,15 @@ class ModelSignalEngine:
             if start <= minute <= end:
                 return name
         return None
+
+    def _is_live_trading_time(self, data_day: str) -> bool:
+        now = datetime.now(BEIJING_TZ)
+        if now.strftime("%Y-%m-%d") != data_day:
+            return False
+        if now.weekday() >= 5:
+            return False
+        minute = now.strftime("%H:%M")
+        return any(start <= minute <= end for start, end in TRADING_SESSIONS)
 
     def _basket_stats(self, model: TModel, day: str, minute: str) -> tuple[float, float] | None:
         values = []
