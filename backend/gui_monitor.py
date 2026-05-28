@@ -194,7 +194,7 @@ class MonitorApp:
         ttk.Button(controls, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=8)
         ttk.Button(controls, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
 
-        columns = ("symbol", "code", "status", "price", "target", "stop", "minute", "score", "message")
+        columns = ("symbol", "code", "status", "action", "price", "target", "stop", "minute", "score", "message")
         table_card = ttk.Frame(outer, style="Card.TFrame", padding=12)
         table_card.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
         ttk.Label(table_card, text="监控列表", style="CardTitle.TLabel").pack(anchor=tk.W, pady=(0, 8))
@@ -203,7 +203,8 @@ class MonitorApp:
             "symbol": "股票",
             "code": "代码",
             "status": "状态",
-            "price": "现价",
+            "action": "信号",
+            "price": "入场/现价",
             "target": "目标价",
             "stop": "止损价",
             "minute": "时间",
@@ -214,12 +215,13 @@ class MonitorApp:
             "symbol": 100,
             "code": 112,
             "status": 82,
+            "action": 100,
             "price": 72,
             "target": 76,
             "stop": 76,
             "minute": 70,
             "score": 64,
-            "message": 330,
+            "message": 300,
         }
         for col in columns:
             self.table.heading(col, text=headings[col])
@@ -460,7 +462,8 @@ class MonitorApp:
                     item.get("symbol", "-"),
                     item.get("code", "-"),
                     item.get("status", "-"),
-                    item.get("last_price", "-"),
+                    item.get("entry_label", "-") if status == "signal" else "-",
+                    item.get("entry_price", item.get("last_price", "-")),
                     item.get("exit_price", "-"),
                     item.get("stop_price", "-"),
                     item.get("minute", "-"),
@@ -474,8 +477,9 @@ class MonitorApp:
             for alert in alerts:
                 if isinstance(alert, dict):
                     self._log(
-                        f"信号：{alert.get('symbol')} 入场 {alert.get('entry_price')} "
-                        f"目标 {alert.get('exit_price')} 止损 {alert.get('stop_price')} "
+                        f"信号：{alert.get('symbol')} {alert.get('signal_detail', alert.get('entry_label', ''))} "
+                        f"入场 {alert.get('entry_price')} {alert.get('exit_label', '目标')} {alert.get('exit_price')} "
+                        f"止损 {alert.get('stop_price')} "
                         f"推送 {alert.get('notify_status', '-')}"
                     )
 

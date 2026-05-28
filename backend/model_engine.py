@@ -390,11 +390,13 @@ class ModelSignalEngine:
             stop_price = current.price * (1 + model.stop_loss)
             entry_label = "建议卖出T仓"
             exit_label = "目标买回"
+            signal_detail = "倒T：先卖出T仓，跌到目标价买回；若反弹到止损价放弃/止损。"
         else:
             exit_price = current.price * (1 + model.take_profit)
             stop_price = current.price * (1 - model.stop_loss)
             entry_label = "建议买入T仓"
             exit_label = "目标卖出"
+            signal_detail = "正T：先买入T仓，涨到目标价卖出；若跌到止损价放弃/止损。"
         return {
             "status": "signal",
             "signal_key": f"{model.code}:{current.day}:{current.minute}:{action}",
@@ -409,6 +411,7 @@ class ModelSignalEngine:
             "action": action,
             "entry_label": entry_label,
             "exit_label": exit_label,
+            "signal_detail": signal_detail,
             "entry_price": round(entry_price, 2),
             "exit_price": round(exit_price, 2),
             "stop_price": round(stop_price, 2),
@@ -426,7 +429,10 @@ class ModelSignalEngine:
             "take_profit_pct": round(model.take_profit * 100, 2),
             "stop_loss_pct": round(model.stop_loss * 100, 2),
             "max_daily_signals": model.max_daily_signals,
-            "message": "检测到做T信号",
+            "message": (
+                f"{signal_detail} 入场价 {round(entry_price, 2)}，"
+                f"{exit_label} {round(exit_price, 2)}，止损价 {round(stop_price, 2)}。"
+            ),
         }
 
     def _snapshot(
