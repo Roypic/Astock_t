@@ -47,6 +47,7 @@ class TModel:
     take_profit: float
     stop_loss: float
     max_basket_dispersion: float
+    volume_ratio_threshold: float = 0.0
     max_daily_signals: int = 1
 
 
@@ -56,6 +57,8 @@ class MinutePrice:
     minute: str
     price: float
     avg_price: float
+    volume: float = 0.0
+    amount: float = 0.0
 
 
 class MarketClient:
@@ -119,6 +122,8 @@ class MarketClient:
                         minute=minute,
                         price=price,
                         avg_price=float(item.get("a") or price),
+                        volume=float(item.get("v") or 0),
+                        amount=float(item.get("t") or 0),
                     )
                 )
         self._cache[cache_key] = (now, prices)
@@ -220,6 +225,7 @@ class ModelSignalEngine:
 
         relative_return = own_return - basket_return
         above_avg = current.price > current.avg_price * (1 + model.avg_threshold)
+        volume_ratio = self._volume_ratio(own, len(own) - 1)
         score = self._score(model, current, basket_return, market_return, relative_return, basket_dispersion)
 
         has_signal = (
@@ -228,6 +234,7 @@ class ModelSignalEngine:
             and relative_return >= model.relative_threshold
             and basket_dispersion <= model.max_basket_dispersion
             and above_avg
+            and volume_ratio >= model.volume_ratio_threshold
         )
         if not has_signal:
             return {
@@ -238,6 +245,7 @@ class ModelSignalEngine:
                 "basket_dispersion_pct": round(basket_dispersion * 100, 2),
                 "relative_return_pct": round(relative_return * 100, 2),
                 "signal_score": round(score, 2),
+                "volume_ratio": round(volume_ratio, 2),
             }
 
         trend = self.client.get_daily_trend(model.code)
@@ -252,6 +260,7 @@ class ModelSignalEngine:
             score=score,
             window_name=window_name,
             trend=trend,
+            volume_ratio=volume_ratio,
         )
         is_new, count = self.store.record_if_new(signal, model.max_daily_signals)
         signal["is_new"] = is_new
@@ -313,6 +322,17 @@ class ModelSignalEngine:
         score -= min(2.0, max(0.0, (basket_dispersion - 0.03) * 100 / 1.5))
         return score
 
+    def _volume_ratio(self, rows: list[MinutePrice], index: int) -> float:
+        if index < 10:
+            return 1.0
+        recent = rows[max(0, index - 4) : index + 1]
+        prior = rows[: max(1, index - 4)]
+        recent_avg = sum(item.volume for item in recent) / max(1, len(recent))
+        prior_avg = sum(item.volume for item in prior) / max(1, len(prior))
+        if prior_avg <= 0:
+            return 1.0
+        return recent_avg / prior_avg
+
     def _make_signal(
         self,
         model: TModel,
@@ -325,6 +345,7 @@ class ModelSignalEngine:
         score: float,
         window_name: str,
         trend: dict[str, float | None],
+        volume_ratio: float,
     ) -> dict[str, Any]:
         entry_price = current.price
         exit_price = current.price * (1 + model.take_profit)
@@ -353,6 +374,7 @@ class ModelSignalEngine:
             "basket_return_pct": round(basket_return * 100, 2),
             "basket_dispersion_pct": round(basket_dispersion * 100, 2),
             "relative_return_pct": round(relative_return * 100, 2),
+            "volume_ratio": round(volume_ratio, 2),
             "ma5": _round_or_dash(trend.get("ma5")),
             "ma10": _round_or_dash(trend.get("ma10")),
             "ma20": _round_or_dash(trend.get("ma20")),
@@ -407,6 +429,7 @@ def _load_model(path: Path) -> TModel:
         take_profit=float(params["take_profit"]),
         stop_loss=float(params["stop_loss"]),
         max_basket_dispersion=float(params["max_basket_dispersion"]),
+        volume_ratio_threshold=float(params.get("volume_ratio_threshold", 0.0)),
         max_daily_signals=int(params.get("max_daily_signals", 1)),
     )
 

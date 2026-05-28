@@ -1,0 +1,119 @@
+{
+  "generated_at": "2026-05-28 20:03:51",
+  "entry_window": "09:30-15:00",
+  "latest_day": "2026-05-28",
+  "previous_day": "2026-05-27",
+  "baseline_train_start": "2026-04-13",
+  "baseline_train_end": "2026-05-27",
+  "updated_train_start": "2026-04-14",
+  "updated_train_end": "2026-05-28",
+  "models": {
+    "东山精密": {
+      "code": "002384.SZ",
+      "baseline_params": {
+        "basket_threshold": 0.02,
+        "market_threshold": 0.009,
+        "relative_threshold": 0.006,
+        "avg_threshold": 0.006,
+        "take_profit": 0.024,
+        "stop_loss": 0.01,
+        "max_basket_dispersion": 0.04,
+        "volume_ratio_threshold": 0.0
+      },
+      "updated_params": {
+        "basket_threshold": 0.02,
+        "market_threshold": 0.009,
+        "relative_threshold": 0.006,
+        "avg_threshold": 0.006,
+        "take_profit": 0.024,
+        "stop_loss": 0.01,
+        "max_basket_dispersion": 0.04,
+        "volume_ratio_threshold": 0.0
+      },
+      "baseline_train": {
+        "n": 5,
+        "win_rate_pct": 60.0,
+        "avg_result_pct": 0.61,
+        "sum_result_pct": 3.03,
+        "max_drawdown_pct": -2.0,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 20.0,
+        "target_rate_pct": 40.0
+      },
+      "baseline_on_latest_day": {
+        "n": 0,
+        "win_rate_pct": 0.0,
+        "avg_result_pct": 0.0,
+        "sum_result_pct": 0.0,
+        "max_drawdown_pct": 0.0,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 0.0,
+        "target_rate_pct": 0.0
+      },
+      "updated_train": {
+        "n": 5,
+        "win_rate_pct": 60.0,
+        "avg_result_pct": 0.61,
+        "sum_result_pct": 3.03,
+        "max_drawdown_pct": -2.0,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 20.0,
+        "target_rate_pct": 40.0
+      },
+      "baseline_previous_5d": {
+        "n": 2,
+        "win_rate_pct": 100.0,
+        "avg_result_pct": 1.31,
+        "sum_result_pct": 2.63,
+        "max_drawdown_pct": 0.0,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 0.0,
+        "target_rate_pct": 50.0
+      },
+      "updated_latest_5d": {
+        "n": 2,
+        "win_rate_pct": 100.0,
+        "avg_result_pct": 1.31,
+        "sum_result_pct": 2.63,
+        "max_drawdown_pct": 0.0,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 0.0,
+        "target_rate_pct": 50.0
+      },
+      "old_params_on_updated_window": {
+        "n": 5,
+        "win_rate_pct": 60.0,
+        "avg_result_pct": 0.61,
+        "sum_result_pct": 3.03,
+        "max_drawdown_pct": -2.0,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 20.0,
+        "target_rate_pct": 40.0
+      },
+      "new_params_on_baseline_window": {
+        "n": 5,
+        "win_rate_pct": 60.0,
+        "avg_result_pct": 0.61,
+        "sum_result_pct": 3.03,
+        "max_drawdown_pct": -2.0,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 20.0,
+        "target_rate_pct": 40.0
+      },
+      "adopt_updated_params": true,
+      "adopt_reason": "参数未变化，维持当前稳定模型",
+      "final_params_source": "updated",
+      "final_params": {
+        "basket_threshold": 0.02,
+        "market_threshold": 0.009,
+        "relative_threshold": 0.006,
+        "avg_threshold": 0.006,
+        "take_profit": 0.024,
+        "stop_loss": 0.01,
+        "max_basket_dispersion": 0.04,
+        "volume_ratio_threshold": 0.0
+      },
+      "latest_day_trade_by_baseline": []
+    }
+  }
+}

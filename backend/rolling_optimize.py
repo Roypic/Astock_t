@@ -43,6 +43,8 @@ def fetch_prices(code: str, is_index: bool = False, since: str = "TRADE_DAYS_AGO
                     "minute": minute,
                     "price": price,
                     "avg_price": float(item.get("a") or price),
+                    "volume": float(item.get("v") or 0),
+                    "amount": float(item.get("t") or 0),
                 }
             )
     return rows
@@ -107,6 +109,18 @@ def market_return(price_map: dict[str, dict[str, list[dict[str, Any]]]], day: st
     return sum(values)
 
 
+def volume_ratio(rows: list[dict[str, Any]], index: int) -> float:
+    if index < 10:
+        return 1.0
+    recent = rows[max(0, index - 4) : index + 1]
+    prior = rows[: max(1, index - 4)]
+    recent_avg = sum(float(item.get("volume", 0)) for item in recent) / max(1, len(recent))
+    prior_avg = sum(float(item.get("volume", 0)) for item in prior) / max(1, len(prior))
+    if prior_avg <= 0:
+        return 1.0
+    return recent_avg / prior_avg
+
+
 def simulate_day(
     model: TModel,
     params: dict[str, float],
@@ -127,12 +141,14 @@ def simulate_day(
         bret, bdisp = bstats
         rel = own_return - bret
         above_avg = current["price"] > current["avg_price"] * (1 + params["avg_threshold"])
+        vr = volume_ratio(rows, i)
         if not (
             bret > params["basket_threshold"]
             and mret > params["market_threshold"]
             and rel >= params["relative_threshold"]
             and bdisp <= params["max_basket_dispersion"]
             and above_avg
+            and vr >= params.get("volume_ratio_threshold", 0.0)
         ):
             continue
 
@@ -166,6 +182,7 @@ def simulate_day(
             "market_return": mret,
             "relative_return": rel,
             "basket_dispersion": bdisp,
+            "volume_ratio": vr,
         }
     return None
 
@@ -227,8 +244,11 @@ def param_grid(base: TModel) -> list[dict[str, float]]:
     tps = sorted(set([base.take_profit, 0.020]))
     stops = sorted(set([base.stop_loss, 0.012]))
     dispersions = sorted(set([base.max_basket_dispersion, 0.045]))
+    volume_thresholds = sorted(set([0.0, base.volume_ratio_threshold, 1.1, 1.3]))
     grid = []
-    for basket, market, rel, avg, tp, stop, disp in product(baskets, markets, relatives, avgs, tps, stops, dispersions):
+    for basket, market, rel, avg, tp, stop, disp, vol in product(
+        baskets, markets, relatives, avgs, tps, stops, dispersions, volume_thresholds
+    ):
         if tp < 0.016:
             continue
         grid.append(
@@ -240,6 +260,7 @@ def param_grid(base: TModel) -> list[dict[str, float]]:
                 "take_profit": round(tp, 5),
                 "stop_loss": round(stop, 5),
                 "max_basket_dispersion": round(disp, 5),
+                "volume_ratio_threshold": round(vol, 5),
             }
         )
     return grid
@@ -272,7 +293,7 @@ def cached_fetch(code: str, is_index: bool, since: str, cache_dir: Path) -> tupl
     cache_dir.mkdir(parents=True, exist_ok=True)
     kind = "index" if is_index else "stock"
     safe_since = since.replace("(", "_").replace(")", "").replace("/", "_")
-    cache_file = cache_dir / f"{kind}_{code}_{safe_since}.json"
+    cache_file = cache_dir / f"v2_{kind}_{code}_{safe_since}.json"
     if cache_file.exists():
         rows = json.loads(cache_file.read_text(encoding="utf-8"))
     else:
@@ -361,10 +382,15 @@ def main() -> None:
     parser.add_argument("--out", default="reports/rolling_optimize_report.json")
     parser.add_argument("--cache-dir", default=".cache/prices")
     parser.add_argument("--write-models", action="store_true", help="稳定性门槛通过后写回模型 JSON")
+    parser.add_argument("--only", default="", help="只训练指定股票名或代码")
     args = parser.parse_args()
 
     models_path = Path(args.models)
     models = load_models(models_path)
+    if args.only:
+        models = [model for model in models if args.only in (model.name, model.code)]
+        if not models:
+            raise SystemExit(f"没有匹配模型：{args.only}")
     files_by_code = {}
     for file in model_files(models_path):
         data = json.loads(file.read_text(encoding="utf-8"))

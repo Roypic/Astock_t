@@ -35,6 +35,7 @@
     "take_profit": 0.024,
     "stop_loss": 0.01,
     "max_basket_dispersion": 0.04,
-    "max_daily_signals": 1
+    "max_daily_signals": 1,
+    "volume_ratio_threshold": 0.0
   }
 }
