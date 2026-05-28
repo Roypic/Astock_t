@@ -38,5 +38,17 @@
     "max_daily_signals": 1,
     "volume_ratio_threshold": 0.0,
     "trade_sides": "buy"
+  },
+  "backtest": {
+    "window": "近30个交易日分钟回测",
+    "mode": "每天最多1T，正T，第一笔信号",
+    "trade_count": 5,
+    "win_rate_pct": 60.0,
+    "avg_result_pct": 0.61,
+    "sum_result_pct": 3.03,
+    "max_drawdown_pct": -2.0,
+    "bad_tail_rate_pct": 20.0,
+    "target_rate_pct": 40.0,
+    "warning": "历史回测不代表未来收益，信号仅作辅助提醒；下单前请结合实时盘口和个人风控。"
   }
 }

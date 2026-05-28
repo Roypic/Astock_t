@@ -7,6 +7,7 @@ import shutil
 import sys
 import threading
 import time
+import json
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
@@ -52,7 +53,7 @@ def ensure_default_models() -> Path:
     if source.exists():
         for model_file in source.glob("*.json"):
             dest = target / model_file.name
-            if not dest.exists():
+            if not dest.exists() or dest.read_text(encoding="utf-8") != model_file.read_text(encoding="utf-8"):
                 shutil.copy2(model_file, dest)
     return target
 
@@ -80,9 +81,11 @@ class MonitorApp:
         self.model_path_var = tk.StringVar(value=str(self.models_dir))
         self.interval_var = tk.StringVar(value=str(DEFAULT_INTERVAL_SECONDS))
         self.status_var = tk.StringVar(value="未启动")
+        self.risk_var = tk.StringVar(value="模型风险摘要：选择模型后显示回测胜率、最大回撤等信息。")
 
         self._configure_style()
         self._build_ui()
+        self._refresh_risk_summary(self.models_dir)
         self.root.after(300, self._drain_queue)
 
     def _configure_style(self) -> None:
@@ -147,6 +150,20 @@ class MonitorApp:
         ttk.Entry(form, textvariable=self.token_var, show="*").grid(row=2, column=1, sticky=tk.EW, padx=(0, 8), pady=7)
         ttk.Label(form, text="间隔秒", style="Muted.TLabel").grid(row=2, column=2, sticky=tk.E, padx=4, pady=7)
         ttk.Entry(form, textvariable=self.interval_var, width=8).grid(row=2, column=3, sticky=tk.W, padx=(8, 0), pady=7)
+
+        self.risk_label = tk.Label(
+            form,
+            textvariable=self.risk_var,
+            bg=COLORS["cream"],
+            fg=COLORS["coral_dark"],
+            justify=tk.LEFT,
+            anchor=tk.W,
+            padx=12,
+            pady=8,
+            wraplength=850,
+            font=("Microsoft YaHei UI", 9),
+        )
+        self.risk_label.grid(row=3, column=0, columnspan=4, sticky=tk.EW, pady=(8, 0))
 
         controls = ttk.Frame(outer)
         controls.pack(fill=tk.X, pady=(0, 12))
@@ -259,11 +276,44 @@ class MonitorApp:
         )
         if path:
             self.model_path_var.set(path)
+            self._refresh_risk_summary(Path(path))
 
     def _choose_dir(self) -> None:
         path = filedialog.askdirectory(title="选择模型文件夹", initialdir=str(self.models_dir))
         if path:
             self.model_path_var.set(path)
+            self._refresh_risk_summary(Path(path))
+
+    def _refresh_risk_summary(self, model_path: Path) -> None:
+        self.risk_var.set(self._model_risk_summary(model_path))
+
+    def _model_files(self, model_path: Path) -> list[Path]:
+        if model_path.is_file():
+            return [model_path]
+        if model_path.is_dir():
+            return sorted(model_path.glob("*.json"))
+        return []
+
+    def _model_risk_summary(self, model_path: Path) -> str:
+        parts = []
+        for file in self._model_files(model_path):
+            try:
+                data = json.loads(file.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            backtest = data.get("backtest") or {}
+            name = data.get("name", file.stem)
+            if backtest:
+                parts.append(
+                    f"{name}：{backtest.get('window', '回测')}，{backtest.get('mode', '模型信号')}，"
+                    f"交易 {backtest.get('trade_count', '-')} 次，胜率 {backtest.get('win_rate_pct', '-')}%，"
+                    f"单次均值 {backtest.get('avg_result_pct', '-')}%，最大回撤 {backtest.get('max_drawdown_pct', '-')}%。"
+                )
+            else:
+                parts.append(f"{name}：未写入回测摘要，请谨慎使用。")
+        if not parts:
+            return "模型风险摘要：没有找到模型 JSON。"
+        return "模型风险摘要：" + "  ".join(parts) + " 历史回测不代表未来收益，请小心使用。"
 
     def _test_push(self) -> None:
         token = self.token_var.get().strip()
@@ -317,6 +367,7 @@ class MonitorApp:
         try:
             models = load_models(model_path)
             self.queue.put(("log", f"已加载 {len(models)} 个模型：" + "、".join(m.name for m in models)))
+            self.queue.put(("risk", self._model_risk_summary(model_path)))
             engine = ModelSignalEngine(models, app_dir() / "data", token)
         except Exception as exc:
             self.queue.put(("error", str(exc)))
@@ -343,6 +394,8 @@ class MonitorApp:
                 self.status_var.set("错误")
                 self.status_badge.configure(bg="#F5DDDD", fg=COLORS["danger"])
                 messagebox.showerror("启动失败", str(payload))
+            elif kind == "risk":
+                self.risk_var.set(str(payload))
             elif kind == "stopped":
                 self.status_var.set("已停止")
                 self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["muted"])
