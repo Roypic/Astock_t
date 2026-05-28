@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.build-venv/
+build/
+dist/
+*.spec
+data/
+logs/
+worker.pid
+.env
+*.log
