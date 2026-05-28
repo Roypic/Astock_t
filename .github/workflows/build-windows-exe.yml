@@ -7,6 +7,9 @@ on:
       - master
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -38,3 +41,14 @@ jobs:
           name: AShareTSignalMonitor-windows
           path: backend/dist/AShareTSignalMonitor.exe
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-latest
+          name: Windows Latest
+          body: "Latest Windows build of AShareTSignalMonitor.exe."
+          files: backend/dist/AShareTSignalMonitor.exe
+          make_latest: true
+          prerelease: false
+          fail_on_unmatched_files: true
