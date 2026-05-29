@@ -37,7 +37,7 @@
     "max_basket_dispersion": 0.04,
     "max_daily_signals": 1,
     "volume_ratio_threshold": 0.0,
-    "trade_sides": "buy"
+    "trade_sides": "both"
   },
   "backtest": {
     "window": "近30个交易日分钟回测",
