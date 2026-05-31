@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from model_engine import BEIJING_TZ, TRADING_SESSIONS, ModelSignalEngine, load_models
+from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, TModel, load_models
 from notifier import PushPlusNotifier
 
 try:
@@ -29,6 +29,7 @@ except Exception:
 
 DEFAULT_INTERVAL_SECONDS = 30
 INTRADAY_NEWS_INTERVAL_SECONDS = 300
+MARKET_WEAK_INTERVAL_SECONDS = 300
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
 NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
 LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/latest"
@@ -116,6 +117,10 @@ MILD_NEGATIVE_TERMS = {
     "降价": 1,
     "风险": 1,
 }
+MARKET_WEAK_INDEX_THRESHOLD = -0.008
+MARKET_WEAK_INDEX_MOMENTUM = -0.0025
+MARKET_WEAK_BASKET_THRESHOLD = -0.012
+MARKET_WEAK_BASKET_MOMENTUM = -0.004
 COLORS = {
     "bg": "#F6F3EC",
     "card": "#FFFDF7",
@@ -169,7 +174,9 @@ class MonitorApp:
         self.stop_event = threading.Event()
         self.worker: threading.Thread | None = None
         self.news_worker: threading.Thread | None = None
+        self.market_worker: threading.Thread | None = None
         self.seen_intraday_news: set[str] = set()
+        self.seen_market_alerts: set[str] = set()
         self.models_dir = ensure_default_models()
         self.mascot_x = 86
         self.mascot_start_x = 86
@@ -182,6 +189,7 @@ class MonitorApp:
         self.model_path_var = tk.StringVar(value=str(self.models_dir))
         self.interval_var = tk.StringVar(value=str(DEFAULT_INTERVAL_SECONDS))
         self.info_alert_var = tk.BooleanVar(value=True)
+        self.market_alert_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="未启动")
         self.risk_var = tk.StringVar(value="模型风险摘要：选择模型后显示回测胜率、最大回撤等信息。")
 
@@ -306,6 +314,17 @@ class MonitorApp:
             selectcolor=COLORS["card"],
             font=("Microsoft YaHei UI", 9),
         ).pack(side=tk.LEFT, padx=(12, 4))
+        tk.Checkbutton(
+            controls,
+            text="大盘/板块走弱",
+            variable=self.market_alert_var,
+            bg=COLORS["bg"],
+            fg=COLORS["text"],
+            activebackground=COLORS["bg"],
+            activeforeground=COLORS["text"],
+            selectcolor=COLORS["card"],
+            font=("Microsoft YaHei UI", 9),
+        ).pack(side=tk.LEFT, padx=(4, 4))
         ttk.Button(controls, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=8)
         ttk.Button(controls, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
 
@@ -1081,9 +1100,22 @@ class MonitorApp:
                 daemon=True,
             )
             self.news_worker.start()
+        if self.market_alert_var.get():
+            self.seen_market_alerts.clear()
+            self.market_worker = threading.Thread(
+                target=self._run_market_weak_worker,
+                args=(model_path, token),
+                daemon=True,
+            )
+            self.market_worker.start()
         self.status_var.set("运行中")
         self.status_badge.configure(bg=COLORS["mint"], fg=COLORS["sage_dark"])
-        info_note = "，盘中信息异动已开启" if self.info_alert_var.get() else ""
+        notes = []
+        if self.info_alert_var.get():
+            notes.append("盘中信息异动已开启")
+        if self.market_alert_var.get():
+            notes.append("大盘/板块走弱提醒已开启")
+        info_note = "，" + "，".join(notes) if notes else ""
         self._log(f"监控已启动{info_note}")
 
     def _stop(self) -> None:
@@ -1223,6 +1255,159 @@ class MonitorApp:
             "title": f"盘中信息异动：{name}",
             "content": "\n".join(lines),
             "summary": f"{name} {len(items)} 条极差情绪新闻",
+        }
+
+    def _run_market_weak_worker(self, model_path: Path, token: str) -> None:
+        try:
+            models = load_models(model_path)
+            client = MarketClient(ttl_seconds=60)
+        except Exception as exc:
+            self.queue.put(("log", f"大盘/板块走弱提醒启动失败：{exc}"))
+            return
+
+        notifier = PushPlusNotifier(token)
+        self.queue.put(("log", f"大盘/板块走弱提醒已启动：每 {MARKET_WEAK_INTERVAL_SECONDS // 60} 分钟检查一次"))
+        while not self.stop_event.is_set():
+            if not self._is_live_trading_now():
+                self.stop_event.wait(60)
+                continue
+            try:
+                alerts = self._scan_market_weakness(models, client)
+                for alert in alerts:
+                    notifier.send_text(alert["content"], title=alert["title"])
+                    self.queue.put(("log", f"大盘/板块走弱已推送：{alert['summary']}"))
+            except Exception as exc:
+                self.queue.put(("log", f"大盘/板块走弱检查失败：{exc}"))
+            self.stop_event.wait(MARKET_WEAK_INTERVAL_SECONDS)
+
+    def _scan_market_weakness(self, models: list[TModel], client: MarketClient) -> list[dict[str, str]]:
+        now = datetime.now(BEIJING_TZ)
+        alerts: list[dict[str, str]] = []
+        index_rows = []
+        for name, code in INDEX_CODES.items():
+            prices = client.get_index_prices(code)
+            stats = self._intraday_weak_stats(prices)
+            if not stats:
+                continue
+            day_return, momentum, minute = stats
+            level = self._weak_level(day_return, momentum, MARKET_WEAK_INDEX_THRESHOLD, MARKET_WEAK_INDEX_MOMENTUM)
+            if not level:
+                continue
+            key = self._market_alert_key(now, "INDEX", name, level)
+            if key in self.seen_market_alerts:
+                continue
+            self.seen_market_alerts.add(key)
+            index_rows.append((name, day_return, momentum, minute, level))
+        if index_rows:
+            alerts.append(self._format_market_index_alert(index_rows, now))
+
+        for model in models:
+            basket_stats = self._basket_weak_stats(model, client)
+            if not basket_stats:
+                continue
+            basket_return, momentum, minute, valid_count = basket_stats
+            level = self._weak_level(
+                basket_return,
+                momentum,
+                MARKET_WEAK_BASKET_THRESHOLD,
+                MARKET_WEAK_BASKET_MOMENTUM,
+            )
+            if not level:
+                continue
+            key = self._market_alert_key(now, "BASKET", model.name, level)
+            if key in self.seen_market_alerts:
+                continue
+            self.seen_market_alerts.add(key)
+            alerts.append(self._format_basket_weak_alert(model, basket_return, momentum, minute, valid_count, level, now))
+        return alerts
+
+    def _intraday_weak_stats(self, prices: list[object]) -> tuple[float, float, str] | None:
+        if len(prices) < 8:
+            return None
+        current = prices[-1]
+        open_price = getattr(prices[0], "price", 0.0)
+        current_price = getattr(current, "price", 0.0)
+        if open_price <= 0 or current_price <= 0:
+            return None
+        lookback_index = max(0, len(prices) - 6)
+        lookback_price = getattr(prices[lookback_index], "price", 0.0)
+        if lookback_price <= 0:
+            return None
+        day_return = current_price / open_price - 1
+        momentum = current_price / lookback_price - 1
+        return day_return, momentum, getattr(current, "minute", "-")
+
+    def _basket_weak_stats(self, model: TModel, client: MarketClient) -> tuple[float, float, str, int] | None:
+        returns = []
+        momentums = []
+        minutes = []
+        for peer in model.basket:
+            stats = self._intraday_weak_stats(client.get_stock_prices(peer.code))
+            if not stats:
+                continue
+            day_return, momentum, minute = stats
+            returns.append(day_return)
+            momentums.append(momentum)
+            minutes.append(minute)
+        if len(returns) < max(2, min(3, len(model.basket))):
+            return None
+        return sum(returns) / len(returns), sum(momentums) / len(momentums), max(minutes), len(returns)
+
+    def _weak_level(self, day_return: float, momentum: float, return_threshold: float, momentum_threshold: float) -> str:
+        if day_return <= return_threshold * 1.7 or momentum <= momentum_threshold * 2.0:
+            return "严重"
+        if day_return <= return_threshold or momentum <= momentum_threshold:
+            return "警戒"
+        return ""
+
+    def _market_alert_key(self, now: datetime, category: str, name: str, level: str) -> str:
+        bucket_minute = (now.minute // 30) * 30
+        return f"{now.strftime('%Y-%m-%d')}:{now.hour:02d}:{bucket_minute:02d}:{category}:{name}:{level}"
+
+    def _format_pct(self, value: float) -> str:
+        return f"{value * 100:+.2f}%"
+
+    def _format_market_index_alert(self, rows: list[tuple[str, float, float, str, str]], now: datetime) -> dict[str, str]:
+        worst_level = "严重" if any(row[4] == "严重" for row in rows) else "警戒"
+        lines = [
+            f"大盘走弱提醒（{worst_level}）",
+            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到指数走弱。",
+            "这不是交易指令，请结合持仓、做T计划和盘中量价确认风险。",
+            "",
+        ]
+        for name, day_return, momentum, minute, level in rows:
+            lines.append(
+                f"- {name}｜{level}｜{minute}｜日内 {self._format_pct(day_return)}｜近约5分钟 {self._format_pct(momentum)}"
+            )
+        return {
+            "title": f"大盘走弱提醒：{worst_level}",
+            "content": "\n".join(lines),
+            "summary": f"{len(rows)} 个指数走弱",
+        }
+
+    def _format_basket_weak_alert(
+        self,
+        model: TModel,
+        basket_return: float,
+        momentum: float,
+        minute: str,
+        valid_count: int,
+        level: str,
+        now: datetime,
+    ) -> dict[str, str]:
+        peer_names = "、".join(peer.name for peer in model.basket[:5])
+        lines = [
+            f"板块/相似股走弱：{model.name}（{level}）",
+            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到关联篮子走弱。",
+            f"样本：{valid_count} 只相似股；{peer_names}",
+            "",
+            f"- {minute}｜篮子日内均值 {self._format_pct(basket_return)}｜近约5分钟 {self._format_pct(momentum)}",
+            "这不是交易指令；若你正在做T或准备挂单，建议先确认大盘、板块和个股承接。",
+        ]
+        return {
+            "title": f"板块走弱提醒：{model.name}",
+            "content": "\n".join(lines),
+            "summary": f"{model.name} 相似股篮子{level}走弱",
         }
 
     def _drain_queue(self) -> None:
