@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from model_engine import BEIJING_TZ, ModelSignalEngine, load_models
+from model_engine import BEIJING_TZ, TRADING_SESSIONS, ModelSignalEngine, load_models
 from notifier import PushPlusNotifier
 
 try:
@@ -28,6 +28,7 @@ except Exception:
     BUILD_SHA = "dev"
 
 DEFAULT_INTERVAL_SECONDS = 30
+INTRADAY_NEWS_INTERVAL_SECONDS = 300
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
 NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
 LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/latest"
@@ -76,6 +77,45 @@ NEWS_THEME_TERMS = (
     "激光晶体",
     "光学",
 )
+SEVERE_NEGATIVE_TERMS = {
+    "立案": 4,
+    "调查": 3,
+    "处罚": 4,
+    "监管函": 3,
+    "问询函": 3,
+    "问询": 2,
+    "警示函": 3,
+    "违法": 4,
+    "违规": 3,
+    "退市": 5,
+    "ST": 4,
+    "暴雷": 5,
+    "亏损": 3,
+    "预亏": 4,
+    "业绩预降": 3,
+    "下修": 2,
+    "下滑": 2,
+    "大幅下降": 3,
+    "减持": 3,
+    "清仓": 4,
+    "冻结": 4,
+    "诉讼": 3,
+    "仲裁": 3,
+    "违约": 5,
+    "债务": 3,
+    "终止": 3,
+    "解约": 3,
+    "跌停": 4,
+    "闪崩": 5,
+}
+MILD_NEGATIVE_TERMS = {
+    "质押": 1,
+    "展期": 1,
+    "解禁": 1,
+    "延期": 1,
+    "降价": 1,
+    "风险": 1,
+}
 COLORS = {
     "bg": "#F6F3EC",
     "card": "#FFFDF7",
@@ -128,6 +168,8 @@ class MonitorApp:
         self.queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self.stop_event = threading.Event()
         self.worker: threading.Thread | None = None
+        self.news_worker: threading.Thread | None = None
+        self.seen_intraday_news: set[str] = set()
         self.models_dir = ensure_default_models()
         self.mascot_x = 86
         self.mascot_start_x = 86
@@ -139,6 +181,7 @@ class MonitorApp:
         self.token_var = tk.StringVar()
         self.model_path_var = tk.StringVar(value=str(self.models_dir))
         self.interval_var = tk.StringVar(value=str(DEFAULT_INTERVAL_SECONDS))
+        self.info_alert_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="未启动")
         self.risk_var = tk.StringVar(value="模型风险摘要：选择模型后显示回测胜率、最大回撤等信息。")
 
@@ -252,6 +295,17 @@ class MonitorApp:
         ttk.Button(controls, text="自选信息面", style="Ghost.TButton", command=self._open_custom_info_window).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="更新程序", style="Ghost.TButton", command=self._check_update).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
+        tk.Checkbutton(
+            controls,
+            text="盘中信息异动",
+            variable=self.info_alert_var,
+            bg=COLORS["bg"],
+            fg=COLORS["text"],
+            activebackground=COLORS["bg"],
+            activeforeground=COLORS["text"],
+            selectcolor=COLORS["card"],
+            font=("Microsoft YaHei UI", 9),
+        ).pack(side=tk.LEFT, padx=(12, 4))
         ttk.Button(controls, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=8)
         ttk.Button(controls, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
 
@@ -1019,9 +1073,18 @@ class MonitorApp:
             daemon=True,
         )
         self.worker.start()
+        if self.info_alert_var.get():
+            self.seen_intraday_news.clear()
+            self.news_worker = threading.Thread(
+                target=self._run_intraday_news_worker,
+                args=(token,),
+                daemon=True,
+            )
+            self.news_worker.start()
         self.status_var.set("运行中")
         self.status_badge.configure(bg=COLORS["mint"], fg=COLORS["sage_dark"])
-        self._log("监控已启动")
+        info_note = "，盘中信息异动已开启" if self.info_alert_var.get() else ""
+        self._log(f"监控已启动{info_note}")
 
     def _stop(self) -> None:
         self.stop_event.set()
@@ -1047,6 +1110,120 @@ class MonitorApp:
                 self.queue.put(("log", f"检查失败：{exc}"))
             self.stop_event.wait(interval)
         self.queue.put(("stopped", None))
+
+    def _run_intraday_news_worker(self, token: str) -> None:
+        notifier = PushPlusNotifier(token)
+        self.queue.put(("log", f"盘中信息异动已启动：每 {INTRADAY_NEWS_INTERVAL_SECONDS // 60} 分钟检查一次预设股负面新闻"))
+        while not self.stop_event.is_set():
+            if not self._is_live_trading_now():
+                self.stop_event.wait(60)
+                continue
+            try:
+                alerts = self._scan_intraday_negative_news()
+                for alert in alerts:
+                    notifier.send_text(alert["content"], title=alert["title"])
+                    self.queue.put(("log", f"盘中信息异动已推送：{alert['summary']}"))
+            except Exception as exc:
+                self.queue.put(("log", f"盘中信息异动检查失败：{exc}"))
+            self.stop_event.wait(INTRADAY_NEWS_INTERVAL_SECONDS)
+
+    def _is_live_trading_now(self) -> bool:
+        now = datetime.now(BEIJING_TZ)
+        if now.weekday() >= 5:
+            return False
+        minute = now.strftime("%H:%M")
+        return any(start <= minute <= end for start, end in TRADING_SESSIONS)
+
+    def _scan_intraday_negative_news(self) -> list[dict[str, str]]:
+        now = datetime.now(BEIJING_TZ)
+        start = now - timedelta(hours=2)
+        alerts = []
+        for name, profile in NEWS_PROFILES.items():
+            theme = " ".join(profile.get("theme", ())[:3])
+            query = f"{name} {theme}".strip()
+            items = self._search_precise_news(query, start, now, limit=8, candidate_limit=16)
+            severe_items = []
+            for item in items:
+                key = str(item.get("article_url") or item.get("news_id") or item.get("title") or "")
+                if not key or key in self.seen_intraday_news:
+                    continue
+                severity = self._negative_news_severity(item)
+                if severity < 5:
+                    continue
+                if self._news_age_minutes(item, now) > 180:
+                    continue
+                self.seen_intraday_news.add(key)
+                item["_negative_severity"] = severity
+                severe_items.append(item)
+            if severe_items:
+                alerts.append(self._format_intraday_news_alert(name, severe_items, now))
+        return alerts
+
+    def _negative_news_severity(self, item: dict[str, object]) -> int:
+        text = self._news_text(item)
+        score = 0
+        for word, weight in SEVERE_NEGATIVE_TERMS.items():
+            if word in text:
+                score += weight
+        for word, weight in MILD_NEGATIVE_TERMS.items():
+            if word in text:
+                score += weight
+        positive_terms = ("澄清", "解除", "撤销", "完成整改", "回购", "增持", "中标", "增长", "扭亏")
+        score -= sum(2 for word in positive_terms if word in text)
+        return max(0, score)
+
+    def _news_age_minutes(self, item: dict[str, object], now: datetime) -> float:
+        published = self._parse_news_time(str(item.get("publish_time") or item.get("fetch_time") or ""))
+        if not published:
+            return 0
+        return max(0, (now - published).total_seconds() / 60)
+
+    def _parse_news_time(self, value: str) -> datetime | None:
+        text = value.strip()
+        if not text:
+            return None
+        text = text.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(text)
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=BEIJING_TZ)
+            return parsed.astimezone(BEIJING_TZ)
+        except ValueError:
+            pass
+        for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+            try:
+                parsed = datetime.strptime(text[: len("2026-05-31 15:36:43")], fmt) if "%z" not in fmt else datetime.strptime(text, fmt)
+                if parsed.tzinfo is None:
+                    return parsed.replace(tzinfo=BEIJING_TZ)
+                return parsed.astimezone(BEIJING_TZ)
+            except ValueError:
+                continue
+        return None
+
+    def _format_intraday_news_alert(self, name: str, items: list[dict[str, object]], now: datetime) -> dict[str, str]:
+        lines = [
+            f"盘中信息异动：{name}",
+            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到极差情绪新闻。",
+            "这不是交易指令，请优先核对原文/公告，并结合盘中量价处理风险。",
+            "",
+        ]
+        for item in sorted(items, key=lambda row: int(row.get("_negative_severity") or 0), reverse=True)[:3]:
+            severity = int(item.get("_negative_severity") or 0)
+            relevance = item.get("_relevance_score")
+            rel = f"，相关度 {float(relevance):.1f}" if isinstance(relevance, (int, float)) else ""
+            title = self._clean_text(str(item.get("title") or "无标题"), 88)
+            source = item.get("source_site") or item.get("media_name") or "未知来源"
+            publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
+            url = item.get("article_url") or ""
+            lines.append(f"- 严重度 {severity}{rel}｜{publish}｜{source}")
+            lines.append(f"  {title}")
+            if url:
+                lines.append(f"  {url}")
+        return {
+            "title": f"盘中信息异动：{name}",
+            "content": "\n".join(lines),
+            "summary": f"{name} {len(items)} 条极差情绪新闻",
+        }
 
     def _drain_queue(self) -> None:
         while True:
