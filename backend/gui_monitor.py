@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import queue
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,10 @@ from tkinter import filedialog, messagebox, ttk
 from model_engine import BEIJING_TZ, ModelSignalEngine, load_models
 from notifier import PushPlusNotifier
 
+try:
+    from build_info import BUILD_SHA
+except Exception:
+    BUILD_SHA = "dev"
 
 DEFAULT_INTERVAL_SECONDS = 30
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
@@ -522,20 +527,37 @@ class MonitorApp:
 
     def _run_update_download(self) -> None:
         try:
-            update_file, updated_at = self._download_latest_exe()
-            self.queue.put(("update_ready", {"file": str(update_file), "updated_at": updated_at}))
-            self.queue.put(("log", f"更新包已下载：{update_file.name}"))
+            update = self._download_latest_exe()
+            if update.get("current"):
+                self.queue.put(("update_current", update))
+                self.queue.put(("log", "当前已经是最新版，无需更新"))
+                return
+            self.queue.put(("update_ready", update))
+            self.queue.put(("log", f"更新包已下载：{Path(str(update['file'])).name}"))
         except Exception as exc:
             self.queue.put(("update_error", str(exc)))
             self.queue.put(("log", f"更新失败：{exc}"))
 
-    def _download_latest_exe(self) -> tuple[Path, str]:
+    def _download_latest_exe(self) -> dict[str, object]:
         req = urllib.request.Request(
             LATEST_RELEASE_API,
             headers={"Accept": "application/vnd.github+json", "User-Agent": "AShareTSignalMonitor/1.0"},
         )
         with urllib.request.urlopen(req, timeout=15) as resp:
             release = json.loads(resp.read().decode("utf-8"))
+        release_sha = str(release.get("target_commitish") or "")
+        if not re.fullmatch(r"[0-9a-fA-F]{7,40}", release_sha):
+            match = re.search(r"Commit:\s*([0-9a-fA-F]{7,40})", str(release.get("body") or ""))
+            release_sha = match.group(1) if match else ""
+        release_short = release_sha[:7] if release_sha else ""
+        current_short = str(BUILD_SHA)[:7]
+        if current_short != "dev" and release_short == current_short:
+            return {
+                "current": True,
+                "updated_at": str(release.get("published_at") or "-"),
+                "sha": release_short,
+            }
+
         assets = release.get("assets", [])
         asset = next((item for item in assets if item.get("name") == EXE_ASSET_NAME), None)
         if not asset:
@@ -556,104 +578,60 @@ class MonitorApp:
         with target.open("rb") as handle:
             if handle.read(2) != b"MZ":
                 raise RuntimeError("下载文件不是有效 Windows EXE，请稍后重试")
-        return target, str(asset.get("updated_at") or release.get("published_at") or "-")
+        return {
+            "current": False,
+            "file": str(target),
+            "updated_at": str(asset.get("updated_at") or release.get("published_at") or "-"),
+            "sha": release_short,
+        }
 
     def _install_update(self, update_file: Path) -> None:
         current_exe = Path(sys.executable).resolve()
         updater_dir = app_dir() / "updates"
         updater_dir.mkdir(parents=True, exist_ok=True)
         batch = updater_dir / "apply_update.bat"
-        powershell = updater_dir / "apply_update.ps1"
-
-        def ps_quote(value: object) -> str:
-            return "'" + str(value).replace("'", "''") + "'"
-
-        ps_script = f"""
-$ErrorActionPreference = "Stop"
-$Src = {ps_quote(update_file)}
-$Dst = {ps_quote(current_exe)}
-$PidToWait = {os.getpid()}
-$AppDir = Split-Path -Parent $Dst
-$Old = "$Dst.old"
-$Log = Join-Path $AppDir "update.log"
-
-function Write-UpdateLog($Message) {{
-  $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-  Add-Content -Path $Log -Value "[$stamp] $Message" -Encoding UTF8
-}}
-
-try {{
-  Write-UpdateLog "waiting for process $PidToWait to exit"
-  $process = Get-Process -Id $PidToWait -ErrorAction SilentlyContinue
-  if ($process) {{
-    Wait-Process -Id $PidToWait -Timeout 45 -ErrorAction SilentlyContinue
-  }}
-  Start-Sleep -Milliseconds 1200
-
-  if (!(Test-Path $Src)) {{
-    throw "找不到下载好的更新文件：$Src"
-  }}
-
-  $stream = [System.IO.File]::OpenRead($Src)
-  try {{
-    if ($stream.Length -lt 1048576) {{
-      throw "更新文件太小，可能下载不完整"
-    }}
-    $first = $stream.ReadByte()
-    $second = $stream.ReadByte()
-    if ($first -ne 77 -or $second -ne 90) {{
-      throw "更新文件不是有效 EXE"
-    }}
-  }} finally {{
-    $stream.Close()
-  }}
-
-  $installed = $false
-  for ($i = 0; $i -lt 30; $i++) {{
-    try {{
-      if (Test-Path $Old) {{
-        Remove-Item $Old -Force
-      }}
-      Move-Item $Dst $Old -Force
-      Move-Item $Src $Dst -Force
-      $installed = $true
-      Write-UpdateLog "updated successfully"
-      break
-    }} catch {{
-      Write-UpdateLog "replace retry $i failed: $($_.Exception.Message)"
-      if ((Test-Path $Old) -and !(Test-Path $Dst)) {{
-        Move-Item $Old $Dst -Force
-      }}
-      Start-Sleep -Seconds 1
-    }}
-  }}
-
-  if (!$installed) {{
-    throw "替换 EXE 失败，请关闭程序后手动下载最新版"
-  }}
-
-  Start-Process -FilePath $Dst -WorkingDirectory $AppDir
-  Start-Sleep -Seconds 2
-  if (Test-Path $Old) {{
-    Remove-Item $Old -Force
-  }}
-}} catch {{
-  Write-UpdateLog "update failed: $($_.Exception.Message)"
-  Add-Type -AssemblyName PresentationFramework
-  [System.Windows.MessageBox]::Show("自动更新失败：$($_.Exception.Message)`n`n可手动下载最新版覆盖安装。", "更新失败") | Out-Null
-}}
-"""
-        powershell.write_text(ps_script.strip() + "\n", encoding="utf-8")
         script = f"""@echo off
 setlocal
+chcp 65001 >nul
+set "SRC={update_file}"
+set "DST={current_exe}"
+set "APPDIR={app_dir()}"
+set "OLD={current_exe}.old"
+set "LOG={app_dir()}\\update.log"
+set "PID={os.getpid()}"
 set "BAT=%~f0"
-powershell -NoProfile -ExecutionPolicy Bypass -File "{powershell}"
-del "%BAT%" >nul 2>nul
+echo [%date% %time%] update started > "%LOG%"
+for /l %%i in (1,1,20) do (
+  tasklist /fi "PID eq %PID%" | find "%PID%" >nul
+  if errorlevel 1 goto replace
+  timeout /t 1 /nobreak >nul
+)
+taskkill /pid %PID% /f >nul 2>nul
+timeout /t 1 /nobreak >nul
+:replace
+if not exist "%SRC%" goto failed
+if exist "%OLD%" del /f /q "%OLD%" >nul 2>nul
+move /y "%DST%" "%OLD%" >> "%LOG%" 2>&1
+move /y "%SRC%" "%DST%" >> "%LOG%" 2>&1
+if errorlevel 1 goto restore
+start "" "%DST%"
+del /f /q "%OLD%" >nul 2>nul
+del /f /q "%BAT%" >nul 2>nul
+exit /b 0
+:restore
+if exist "%OLD%" if not exist "%DST%" move /y "%OLD%" "%DST%" >> "%LOG%" 2>&1
+:failed
+echo [%date% %time%] update failed >> "%LOG%"
+start "" "%APPDIR%"
+mshta "javascript:alert('自动更新失败，请手动下载最新版覆盖。详情见 update.log');close()"
+exit /b 1
 """
         batch.write_text(script, encoding="gbk", errors="ignore")
-        subprocess.Popen(["cmd", "/c", str(batch)], cwd=str(app_dir()))
-        self.root.after(200, self.root.destroy)
-        self.root.after(800, lambda: os._exit(0))
+        flags = 0
+        if os.name == "nt":
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
+        subprocess.Popen(["cmd.exe", "/c", str(batch)], cwd=str(app_dir()), creationflags=flags)
+        os._exit(0)
 
     def _run_info_premarket(self) -> None:
         try:
@@ -935,12 +913,21 @@ del "%BAT%" >nul 2>nul
                 info = payload if isinstance(payload, dict) else {}
                 update_file = Path(str(info.get("file", "")))
                 updated_at = info.get("updated_at", "-")
+                sha = info.get("sha", "-")
                 should_install = messagebox.askyesno(
                     "更新程序",
-                    f"最新版已下载。\n更新时间：{updated_at}\n\n是否现在退出并安装更新？",
+                    f"新版已下载。\n版本：{sha}\n更新时间：{updated_at}\n\n是否现在退出并安装更新？",
                 )
                 if should_install and update_file.exists():
                     self._install_update(update_file)
+            elif kind == "update_current":
+                self.status_var.set("已是最新版")
+                self.status_badge.configure(bg=COLORS["mint"], fg=COLORS["sage_dark"])
+                info = payload if isinstance(payload, dict) else {}
+                messagebox.showinfo(
+                    "更新程序",
+                    f"当前已经是最新版。\n版本：{info.get('sha', BUILD_SHA)}\n更新时间：{info.get('updated_at', '-')}",
+                )
             elif kind == "update_error":
                 self.status_var.set("更新失败")
                 self.status_badge.configure(bg="#F5DDDD", fg=COLORS["danger"])
