@@ -208,6 +208,7 @@ class MonitorApp:
         controls.pack(fill=tk.X, pady=(0, 12))
         ttk.Button(controls, text="模型盘前", style="Ghost.TButton", command=self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="信息面盘前", style="Ghost.TButton", command=self._show_info_premarket).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls, text="自选信息面", style="Ghost.TButton", command=self._open_custom_info_window).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="更新程序", style="Ghost.TButton", command=self._check_update).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
         ttk.Button(controls, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=8)
@@ -404,6 +405,110 @@ class MonitorApp:
         self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["sage_dark"])
         self._log("正在获取信息面盘前摘要")
         threading.Thread(target=self._run_info_premarket, daemon=True).start()
+
+    def _open_custom_info_window(self) -> None:
+        window = tk.Toplevel(self.root)
+        window.title("自选信息面搜索")
+        window.geometry("820x620")
+        window.configure(bg=COLORS["bg"])
+
+        panel = ttk.Frame(window, style="Card.TFrame", padding=14)
+        panel.pack(fill=tk.X, padx=14, pady=(14, 8))
+        panel.columnconfigure(1, weight=1)
+
+        query_var = tk.StringVar()
+        days_var = tk.StringVar(value="3")
+        status_var = tk.StringVar(value="输入股票名/代码/主题关键词后搜索。")
+
+        ttk.Label(panel, text="关键词", style="Muted.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        entry = ttk.Entry(panel, textvariable=query_var)
+        entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 10))
+        ttk.Label(panel, text="天数", style="Muted.TLabel").grid(row=0, column=2, sticky=tk.E, padx=(0, 8))
+        ttk.Entry(panel, textvariable=days_var, width=6).grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
+
+        result = tk.Text(
+            window,
+            wrap=tk.WORD,
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            relief=tk.FLAT,
+            padx=16,
+            pady=14,
+            font=("Microsoft YaHei UI", 10),
+        )
+        result.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
+        tk.Label(
+            window,
+            textvariable=status_var,
+            bg=COLORS["bg"],
+            fg=COLORS["muted"],
+            anchor=tk.W,
+            font=("Microsoft YaHei UI", 9),
+        ).pack(fill=tk.X, padx=16, pady=(0, 10))
+
+        def run_search() -> None:
+            query = query_var.get().strip()
+            if not query:
+                messagebox.showwarning("缺少关键词", "请输入股票名、代码或主题关键词。")
+                return
+            try:
+                days = max(1, min(14, int(days_var.get().strip())))
+            except ValueError:
+                messagebox.showwarning("天数无效", "天数请输入 1-14 的数字。")
+                return
+            result.configure(state=tk.NORMAL)
+            result.delete("1.0", tk.END)
+            result.insert(tk.END, "正在搜索，请稍候...\n")
+            result.configure(state=tk.DISABLED)
+            status_var.set("正在搜索信息面...")
+
+            def worker() -> None:
+                try:
+                    content = self._build_custom_info_report(query, days)
+                    self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": content}))
+                except Exception as exc:
+                    self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": f"搜索失败：{exc}"}))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        ttk.Button(panel, text="搜索", style="Primary.TButton", command=run_search).grid(row=0, column=4, sticky=tk.E)
+        entry.bind("<Return>", lambda _event: run_search())
+        entry.focus_set()
+
+    def _build_custom_info_report(self, query: str, days: int) -> str:
+        now = datetime.now(BEIJING_TZ)
+        start = now - timedelta(days=days)
+        items = self._search_news(query, start, now, limit=12)
+        lines = [
+            f"自选信息面：{query}",
+            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')}，范围：最近 {days} 天新闻语义检索。",
+            "仅支持查看最近半个月以内的新闻数据。",
+            "",
+        ]
+        if not items:
+            lines.append("暂未检索到相关新闻。可以换成公司简称、股票代码或行业关键词再试。")
+            return "\n".join(lines)
+
+        stance_counts = {"利好": 0, "风险": 0, "中性": 0}
+        for item in items:
+            stance = self._news_stance(item)
+            stance_counts[stance] += 1
+            title = self._clean_text(str(item.get("title") or "无标题"), 90)
+            source = item.get("source_site") or item.get("media_name") or "未知来源"
+            publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
+            url = item.get("article_url") or ""
+            lines.append(f"- [{stance}] {publish} {source}：{title}")
+            if url:
+                lines.append(f"  {url}")
+        summary = " / ".join(f"{k}{v}" for k, v in stance_counts.items() if v)
+        lines.extend(
+            [
+                "",
+                f"小结：{summary or '中性'}。",
+                "风险提醒：这是新闻语义搜索和关键词分类，不是投资建议；重要消息请打开原文和公告核对。",
+            ]
+        )
+        return "\n".join(lines)
 
     def _check_update(self) -> None:
         if not getattr(sys, "frozen", False):
@@ -761,6 +866,21 @@ del "%BAT%" >nul 2>nul
                 self.status_var.set("更新失败")
                 self.status_badge.configure(bg="#F5DDDD", fg=COLORS["danger"])
                 messagebox.showerror("更新失败", str(payload))
+            elif kind == "custom_info_result":
+                info = payload if isinstance(payload, dict) else {}
+                text_widget = info.get("text")
+                status_var = info.get("status")
+                content = str(info.get("content", ""))
+                if hasattr(text_widget, "configure") and hasattr(text_widget, "delete"):
+                    try:
+                        text_widget.configure(state=tk.NORMAL)
+                        text_widget.delete("1.0", tk.END)
+                        text_widget.insert(tk.END, content)
+                        text_widget.configure(state=tk.DISABLED)
+                    except tk.TclError:
+                        pass
+                if hasattr(status_var, "set"):
+                    status_var.set("搜索完成")
             elif kind == "stopped":
                 self.status_var.set("已停止")
                 self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["muted"])
