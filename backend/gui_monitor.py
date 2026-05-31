@@ -40,6 +40,41 @@ INFO_QUERIES = (
     "CPO 光模块 AI算力",
     "PCB AI服务器",
 )
+NEWS_PROFILES = {
+    "剑桥科技": {
+        "aliases": ("剑桥科技", "剑桥", "603083", "CIG"),
+        "required": ("剑桥科技", "剑桥", "603083"),
+        "theme": ("CPO", "光模块", "光通信", "算力", "数据中心"),
+    },
+    "东山精密": {
+        "aliases": ("东山精密", "东山", "002384"),
+        "required": ("东山精密", "东山", "002384"),
+        "theme": ("PCB", "FPC", "AI服务器", "服务器", "电子元器件", "光模块"),
+    },
+    "福晶科技": {
+        "aliases": ("福晶科技", "福晶", "002222"),
+        "required": ("福晶科技", "福晶", "002222"),
+        "theme": ("激光晶体", "非线性晶体", "光学", "光通信", "光模块"),
+    },
+    "利通电子": {
+        "aliases": ("利通电子", "利通", "603629"),
+        "required": ("利通电子", "利通", "603629"),
+        "theme": ("PCB", "AI服务器", "电子元器件", "服务器", "算力"),
+    },
+}
+NEWS_THEME_TERMS = (
+    "CPO",
+    "光模块",
+    "光通信",
+    "算力",
+    "AI服务器",
+    "服务器",
+    "PCB",
+    "FPC",
+    "电子元器件",
+    "激光晶体",
+    "光学",
+)
 COLORS = {
     "bg": "#F6F3EC",
     "card": "#FFFDF7",
@@ -483,11 +518,13 @@ class MonitorApp:
     def _build_custom_info_report(self, query: str, days: int) -> str:
         now = datetime.now(BEIJING_TZ)
         start = now - timedelta(days=days)
-        items = self._search_news(query, start, now, limit=12)
+        candidates = self._search_news(query, start, now, limit=36)
+        items = self._rerank_news(query, candidates, limit=12)
         lines = [
             f"自选信息面：{query}",
-            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')}，范围：最近 {days} 天新闻语义检索。",
+            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')}，范围：最近 {days} 天新闻语义检索 + 本地精准匹配过滤。",
             "仅支持查看最近半个月以内的新闻数据。",
+            f"候选 {len(candidates)} 条，精准匹配后保留 {len(items)} 条。",
             "",
         ]
         if not items:
@@ -498,11 +535,13 @@ class MonitorApp:
         for item in items:
             stance = self._news_stance(item)
             stance_counts[stance] += 1
+            relevance = item.get("_relevance_score")
+            relevance_text = f" 相关度 {float(relevance):.1f}" if isinstance(relevance, (int, float)) else ""
             title = self._clean_text(str(item.get("title") or "无标题"), 90)
             source = item.get("source_site") or item.get("media_name") or "未知来源"
             publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
             url = item.get("article_url") or ""
-            lines.append(f"- [{stance}] {publish} {source}：{title}")
+            lines.append(f"- [{stance}{relevance_text}] {publish} {source}：{title}")
             if url:
                 lines.append(f"  {url}")
         summary = " / ".join(f"{k}{v}" for k, v in stance_counts.items() if v)
@@ -648,7 +687,7 @@ exit /b 1
         results = []
         seen = set()
         for query in INFO_QUERIES:
-            for item in self._search_news(query, start, now, limit=5):
+            for item in self._search_precise_news(query, start, now, limit=5, candidate_limit=24):
                 key = item.get("article_url") or item.get("news_id") or item.get("title")
                 if key in seen:
                     continue
@@ -659,7 +698,7 @@ exit /b 1
         results.sort(key=lambda item: str(item.get("publish_time") or item.get("fetch_time") or ""), reverse=True)
         lines = [
             f"信息面盘前汇总（北京时间 {now.strftime('%Y-%m-%d %H:%M')}）",
-            "范围：最近3天新闻语义检索；仅支持查看最近半个月以内的新闻数据。",
+            "范围：最近3天新闻语义检索 + 本地精准匹配过滤；仅支持查看最近半个月以内的新闻数据。",
             "",
         ]
         if not results:
@@ -676,11 +715,13 @@ exit /b 1
             for item in items[:5]:
                 stance = self._news_stance(item)
                 stance_counts[stance] += 1
+                relevance = item.get("_relevance_score")
+                relevance_text = f" 相关度 {float(relevance):.1f}" if isinstance(relevance, (int, float)) else ""
                 title = self._clean_text(str(item.get("title") or "无标题"), 70)
                 source = item.get("source_site") or item.get("media_name") or "未知来源"
                 publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
                 url = item.get("article_url") or ""
-                lines.append(f"- [{stance}] {publish} {source}：{title}")
+                lines.append(f"- [{stance}{relevance_text}] {publish} {source}：{title}")
                 if url:
                     lines.append(f"  {url}")
             summary = " / ".join(f"{k}{v}" for k, v in stance_counts.items() if v)
@@ -710,6 +751,131 @@ exit /b 1
                 if isinstance(value, list):
                     return [item for item in value if isinstance(item, dict)]
         return []
+
+    def _search_precise_news(
+        self,
+        query: str,
+        start: datetime,
+        end: datetime,
+        limit: int = 5,
+        candidate_limit: int = 24,
+    ) -> list[dict[str, object]]:
+        candidates = self._search_news(query, start, end, limit=candidate_limit)
+        return self._rerank_news(query, candidates, limit=limit)
+
+    def _rerank_news(self, query: str, items: list[dict[str, object]], limit: int) -> list[dict[str, object]]:
+        scored: list[tuple[float, str, dict[str, object]]] = []
+        for item in items:
+            score = self._news_relevance_score(query, item)
+            if score < self._news_relevance_threshold(query):
+                continue
+            copied = dict(item)
+            copied["_relevance_score"] = round(score, 1)
+            publish = str(copied.get("publish_time") or copied.get("fetch_time") or "")
+            scored.append((score, publish, copied))
+        scored.sort(key=lambda row: (row[0], row[1]), reverse=True)
+        return [item for _score, _publish, item in scored[:limit]]
+
+    def _news_relevance_threshold(self, query: str) -> float:
+        profile = self._news_profile_for_query(query)
+        if profile:
+            return 3.2
+        primary_terms = [
+            term
+            for term in self._query_terms(query)
+            if term not in NEWS_THEME_TERMS and len(term) >= 3 and not term.lower().startswith(("ai", "cpo"))
+        ]
+        if primary_terms:
+            return 3.0
+        return 2.0 if any(term in query for term in NEWS_THEME_TERMS) else 2.4
+
+    def _news_relevance_score(self, query: str, item: dict[str, object]) -> float:
+        text = self._news_text(item)
+        title = str(item.get("title") or "")
+        terms = self._query_terms(query)
+        profile = self._news_profile_for_query(query)
+
+        score = 0.0
+        if query and query in text:
+            score += 4.0
+        for term in terms:
+            if term in text:
+                score += 1.8 if len(term) >= 3 else 1.1
+            if term and term in title:
+                score += 1.1
+        primary_terms = [
+            term
+            for term in terms
+            if term not in NEWS_THEME_TERMS and len(term) >= 3 and not term.lower().startswith(("ai", "cpo"))
+        ]
+        if primary_terms and not any(term in text for term in primary_terms):
+            score -= 2.2
+
+        if profile:
+            aliases = tuple(profile.get("aliases", ()))
+            required = tuple(profile.get("required", ()))
+            theme = tuple(profile.get("theme", ()))
+            alias_hits = sum(1 for word in aliases if word and word in text)
+            required_hits = sum(1 for word in required if word and word in text)
+            theme_hits = sum(1 for word in theme if word and word in text)
+            score += min(alias_hits, 3) * 2.0
+            score += min(theme_hits, 3) * 0.9
+            if required_hits:
+                score += 3.0
+            else:
+                score -= 4.0
+
+        theme_hits = sum(1 for word in NEWS_THEME_TERMS if word in query and word in text)
+        score += min(theme_hits, 4) * 1.0
+
+        query_grams = self._char_grams(query)
+        if query_grams:
+            text_grams = self._char_grams(text[:500])
+            overlap = len(query_grams & text_grams)
+            score += min(2.5, overlap / max(1, len(query_grams)) * 2.5)
+
+        broad_market_words = ("大盘", "指数", "沪指", "深成指", "创业板", "美股", "港股", "期货", "基金")
+        if not any(word in query for word in broad_market_words) and any(word in title for word in broad_market_words):
+            score -= 0.8
+        return score
+
+    def _news_profile_for_query(self, query: str) -> dict[str, tuple[str, ...]] | None:
+        for profile in NEWS_PROFILES.values():
+            if any(alias and alias in query for alias in profile.get("aliases", ())):
+                return profile
+        return None
+
+    def _news_text(self, item: dict[str, object]) -> str:
+        values = (
+            item.get("title", ""),
+            item.get("summary", ""),
+            item.get("content", ""),
+            item.get("_query", ""),
+            item.get("source_site", ""),
+            item.get("media_name", ""),
+        )
+        return " ".join(str(value) for value in values if value)
+
+    def _query_terms(self, query: str) -> list[str]:
+        raw_terms = re.findall(r"[A-Za-z0-9]+|[\u4e00-\u9fff]{2,}", query)
+        terms = []
+        for term in raw_terms:
+            if term not in terms:
+                terms.append(term)
+        for theme in NEWS_THEME_TERMS:
+            if theme in query and theme not in terms:
+                terms.append(theme)
+        return terms
+
+    def _char_grams(self, text: str) -> set[str]:
+        cleaned = re.sub(r"\s+", "", text)
+        grams: set[str] = set()
+        for size in (2, 3, 4):
+            for index in range(0, max(0, len(cleaned) - size + 1)):
+                gram = cleaned[index : index + size]
+                if re.search(r"[\u4e00-\u9fffA-Za-z0-9]", gram):
+                    grams.add(gram)
+        return grams
 
     def _group_news(self, items: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
         groups: dict[str, list[dict[str, object]]] = {
