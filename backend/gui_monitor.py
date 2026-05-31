@@ -10,10 +10,11 @@ import time
 import json
 import webbrowser
 import tkinter as tk
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from model_engine import ModelSignalEngine, load_models
+from model_engine import BEIJING_TZ, ModelSignalEngine, load_models
 from notifier import PushPlusNotifier
 
 
@@ -190,6 +191,7 @@ class MonitorApp:
 
         controls = ttk.Frame(outer)
         controls.pack(fill=tk.X, pady=(0, 12))
+        ttk.Button(controls, text="盘前分析", style="Ghost.TButton", command=self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
         ttk.Button(controls, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=8)
         ttk.Button(controls, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
@@ -366,6 +368,95 @@ class MonitorApp:
             messagebox.showinfo("成功", "测试消息已发送。")
         except Exception as exc:
             messagebox.showerror("推送失败", str(exc))
+
+    def _show_premarket_analysis(self) -> None:
+        model_path = Path(self.model_path_var.get().strip())
+        if not model_path.exists():
+            messagebox.showwarning("模型不存在", "请选择模型 JSON 文件或模型文件夹。")
+            return
+        try:
+            analysis = self._build_premarket_analysis(model_path)
+        except Exception as exc:
+            messagebox.showerror("盘前分析失败", str(exc))
+            return
+        self._log("已生成盘前分析")
+        self._open_text_window("盘前分析", analysis)
+
+    def _build_premarket_analysis(self, model_path: Path) -> str:
+        files = self._model_files(model_path)
+        if not files:
+            return "没有找到模型 JSON。"
+
+        now = datetime.now(BEIJING_TZ)
+        trade_note = "今天是交易日" if now.weekday() < 5 else "今天不是交易日，以下仅作下个交易日前的准备清单"
+        rows = []
+        for file in files:
+            data = json.loads(file.read_text(encoding="utf-8"))
+            params = data.get("params", {})
+            backtest = data.get("backtest", {})
+            win = float(backtest.get("win_rate_pct") or 0)
+            avg = float(backtest.get("avg_result_pct") or 0)
+            dd = float(backtest.get("max_drawdown_pct") or 0)
+            n = int(backtest.get("trade_count") or 0)
+            score = win + avg * 8 + dd * 2 + min(n, 12) * 0.8
+            rows.append((score, data, params, backtest))
+
+        rows.sort(key=lambda item: item[0], reverse=True)
+        lines = [
+            f"盘前分析（北京时间 {now.strftime('%Y-%m-%d %H:%M')}）",
+            trade_note,
+            "",
+            "今日使用方式：开盘后先看大盘和板块是否配合；只有 EXE 盘中推送出现时才按信号执行，不要盘前提前下单。",
+            "",
+            "优先观察顺序：",
+        ]
+        for rank, (_score, data, params, backtest) in enumerate(rows, start=1):
+            side = "正T/倒T" if params.get("trade_sides") == "both" else "正T" if params.get("trade_sides", "buy") == "buy" else "倒T"
+            lines.append(
+                f"{rank}. {data.get('name')} {data.get('code')}：{side}，"
+                f"回测 {backtest.get('trade_count', '-')} 次，胜率 {backtest.get('win_rate_pct', '-')}%，"
+                f"单次均值 {backtest.get('avg_result_pct', '-')}%，最大回撤 {backtest.get('max_drawdown_pct', '-')}%。"
+            )
+        lines.extend(["", "触发条件速查："])
+        for _score, data, params, _backtest in rows:
+            volume_note = (
+                f"，放量比 >= {params.get('volume_ratio_threshold')}"
+                if float(params.get("volume_ratio_threshold") or 0) > 0
+                else ""
+            )
+            lines.append(
+                f"- {data.get('name')}：相似股篮子 > {float(params.get('basket_threshold', 0))*100:.2f}%，"
+                f"大盘 > {float(params.get('market_threshold', 0))*100:.2f}%，"
+                f"相对篮子 > {float(params.get('relative_threshold', 0))*100:.2f}%，"
+                f"价格高于分时均价 {float(params.get('avg_threshold', 0))*100:.2f}%{volume_note}；"
+                f"目标 {float(params.get('take_profit', 0))*100:.2f}%，止损 {float(params.get('stop_loss', 0))*100:.2f}%。"
+            )
+        lines.extend(
+            [
+                "",
+                "风险提醒：历史回测不代表未来收益；盘前分析只告诉你今天重点盯谁，真正买卖价以盘中实时信号为准。",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _open_text_window(self, title: str, content: str) -> None:
+        window = tk.Toplevel(self.root)
+        window.title(title)
+        window.geometry("760x560")
+        window.configure(bg=COLORS["bg"])
+        text = tk.Text(
+            window,
+            wrap=tk.WORD,
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            relief=tk.FLAT,
+            padx=16,
+            pady=14,
+            font=("Microsoft YaHei UI", 10),
+        )
+        text.pack(fill=tk.BOTH, expand=True, padx=14, pady=14)
+        text.insert(tk.END, content)
+        text.configure(state=tk.DISABLED)
 
     def _start(self) -> None:
         if self.worker and self.worker.is_alive():
