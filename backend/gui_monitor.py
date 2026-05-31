@@ -4,6 +4,7 @@ import os
 import queue
 import random
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -23,6 +24,9 @@ from notifier import PushPlusNotifier
 DEFAULT_INTERVAL_SECONDS = 30
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
 NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
+LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/latest"
+RELEASE_PAGE_URL = "https://github.com/Roypic/Astock_t/releases/latest"
+EXE_ASSET_NAME = "AShareTSignalMonitor.exe"
 INFO_QUERIES = (
     "剑桥科技 CPO 光模块",
     "东山精密 PCB AI服务器 光模块",
@@ -204,6 +208,7 @@ class MonitorApp:
         controls.pack(fill=tk.X, pady=(0, 12))
         ttk.Button(controls, text="模型盘前", style="Ghost.TButton", command=self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="信息面盘前", style="Ghost.TButton", command=self._show_info_premarket).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls, text="更新程序", style="Ghost.TButton", command=self._check_update).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
         ttk.Button(controls, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=8)
         ttk.Button(controls, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
@@ -399,6 +404,72 @@ class MonitorApp:
         self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["sage_dark"])
         self._log("正在获取信息面盘前摘要")
         threading.Thread(target=self._run_info_premarket, daemon=True).start()
+
+    def _check_update(self) -> None:
+        if not getattr(sys, "frozen", False):
+            webbrowser.open(RELEASE_PAGE_URL)
+            messagebox.showinfo("源码模式", "当前不是打包后的 EXE，已打开最新版下载页面。")
+            return
+        self.status_var.set("正在检查更新")
+        self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["sage_dark"])
+        self._log("正在从 GitHub 检查并下载最新版")
+        threading.Thread(target=self._run_update_download, daemon=True).start()
+
+    def _run_update_download(self) -> None:
+        try:
+            update_file, updated_at = self._download_latest_exe()
+            self.queue.put(("update_ready", {"file": str(update_file), "updated_at": updated_at}))
+            self.queue.put(("log", f"更新包已下载：{update_file.name}"))
+        except Exception as exc:
+            self.queue.put(("update_error", str(exc)))
+            self.queue.put(("log", f"更新失败：{exc}"))
+
+    def _download_latest_exe(self) -> tuple[Path, str]:
+        req = urllib.request.Request(
+            LATEST_RELEASE_API,
+            headers={"Accept": "application/vnd.github+json", "User-Agent": "AShareTSignalMonitor/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            release = json.loads(resp.read().decode("utf-8"))
+        assets = release.get("assets", [])
+        asset = next((item for item in assets if item.get("name") == EXE_ASSET_NAME), None)
+        if not asset:
+            raise RuntimeError("最新版 release 中没有找到 EXE 文件")
+
+        download_url = asset.get("browser_download_url")
+        if not download_url:
+            raise RuntimeError("最新版 EXE 缺少下载链接")
+
+        target = app_dir() / f"{EXE_ASSET_NAME}.download"
+        req = urllib.request.Request(download_url, headers={"User-Agent": "AShareTSignalMonitor/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp, target.open("wb") as out:
+            shutil.copyfileobj(resp, out)
+        if target.stat().st_size < 1024 * 1024:
+            raise RuntimeError("下载文件过小，可能不是有效 EXE")
+        return target, str(asset.get("updated_at") or release.get("published_at") or "-")
+
+    def _install_update(self, update_file: Path) -> None:
+        current_exe = Path(sys.executable).resolve()
+        batch = app_dir() / "apply_update.bat"
+        script = f"""@echo off
+setlocal
+set "SRC={update_file}"
+set "DST={current_exe}"
+set "BAT=%~f0"
+timeout /t 2 /nobreak >nul
+:retry
+copy /y "%SRC%" "%DST%" >nul
+if errorlevel 1 (
+  timeout /t 1 /nobreak >nul
+  goto retry
+)
+del "%SRC%" >nul 2>nul
+start "" "%DST%"
+del "%BAT%" >nul 2>nul
+"""
+        batch.write_text(script, encoding="gbk", errors="ignore")
+        subprocess.Popen(["cmd", "/c", str(batch)], cwd=str(app_dir()))
+        self.root.destroy()
 
     def _run_info_premarket(self) -> None:
         try:
@@ -674,6 +745,22 @@ class MonitorApp:
                 self.status_var.set("信息面获取失败")
                 self.status_badge.configure(bg="#F5DDDD", fg=COLORS["danger"])
                 messagebox.showerror("信息面盘前失败", str(payload))
+            elif kind == "update_ready":
+                self.status_var.set("更新包已就绪")
+                self.status_badge.configure(bg=COLORS["mint"], fg=COLORS["sage_dark"])
+                info = payload if isinstance(payload, dict) else {}
+                update_file = Path(str(info.get("file", "")))
+                updated_at = info.get("updated_at", "-")
+                should_install = messagebox.askyesno(
+                    "更新程序",
+                    f"最新版已下载。\n更新时间：{updated_at}\n\n是否现在退出并安装更新？",
+                )
+                if should_install and update_file.exists():
+                    self._install_update(update_file)
+            elif kind == "update_error":
+                self.status_var.set("更新失败")
+                self.status_badge.configure(bg="#F5DDDD", fg=COLORS["danger"])
+                messagebox.showerror("更新失败", str(payload))
             elif kind == "stopped":
                 self.status_var.set("已停止")
                 self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["muted"])
