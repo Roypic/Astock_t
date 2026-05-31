@@ -9,6 +9,9 @@ import subprocess
 import sys
 import threading
 import time
+import html
+import email.utils
+import xml.etree.ElementTree as ET
 from http.client import IncompleteRead
 import json
 import urllib.parse
@@ -32,6 +35,7 @@ INTRADAY_NEWS_INTERVAL_SECONDS = 300
 MARKET_WEAK_INTERVAL_SECONDS = 300
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
 NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
+GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/latest"
 RELEASE_PAGE_URL = "https://github.com/Roypic/Astock_t/releases/latest"
 EXE_ASSET_NAME = "AShareTSignalMonitor.exe"
@@ -631,6 +635,9 @@ class MonitorApp:
             relevance_text = f" 相关度 {float(relevance):.1f}" if isinstance(relevance, (int, float)) else ""
             title = self._clean_text(str(item.get("title") or "无标题"), 90)
             source = item.get("source_site") or item.get("media_name") or "未知来源"
+            source_channel = item.get("_source")
+            if source_channel and source_channel not in str(source):
+                source = f"{source} / {source_channel}"
             publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
             url = item.get("article_url") or ""
             lines.append(f"- [{stance}{relevance_text}] {publish} {source}：{title}")
@@ -861,16 +868,94 @@ class MonitorApp:
                 items = self._search_news(search_query, start, end, limit=per_limit)
             except Exception as exc:
                 self.queue.put(("log", f"宽泛搜索子查询失败：{search_query}｜{exc}"))
-                continue
+                items = []
             for item in items:
                 key = item.get("article_url") or item.get("news_id") or item.get("title")
                 if key in seen:
                     continue
                 seen.add(key)
                 copied = dict(item)
+                copied["_source"] = copied.get("_source") or "FTShare"
                 copied["_query"] = search_query
                 results.append(copied)
+            try:
+                rss_items = self._search_google_news_rss(search_query, start, end, limit=per_limit)
+            except Exception as exc:
+                self.queue.put(("log", f"Google News RSS 子查询失败：{search_query}｜{exc}"))
+                rss_items = []
+            for item in rss_items:
+                key = item.get("article_url") or item.get("news_id") or item.get("title")
+                if key in seen:
+                    continue
+                seen.add(key)
+                item["_query"] = search_query
+                results.append(item)
         return results
+
+    def _search_google_news_rss(
+        self,
+        query: str,
+        start: datetime,
+        end: datetime,
+        limit: int = 12,
+    ) -> list[dict[str, object]]:
+        params = {
+            "q": query,
+            "hl": "zh-CN",
+            "gl": "CN",
+            "ceid": "CN:zh-Hans",
+        }
+        url = GOOGLE_NEWS_RSS_URL + "?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 AShareTSignalMonitor/1.0",
+                "Accept": "application/rss+xml, application/xml, text/xml",
+                "Connection": "close",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read()
+        root = ET.fromstring(raw)
+        rows = []
+        for item in root.findall("./channel/item"):
+            title = html.unescape(item.findtext("title") or "").strip()
+            link = html.unescape(item.findtext("link") or "").strip()
+            source = html.unescape(item.findtext("source") or "Google News").strip()
+            description = re.sub(r"<[^>]+>", " ", html.unescape(item.findtext("description") or ""))
+            published_text = item.findtext("pubDate") or ""
+            published = self._parse_rss_time(published_text)
+            if published and (published < start or published > end + timedelta(days=1)):
+                continue
+            title, parsed_source = self._split_google_title(title, source)
+            rows.append(
+                {
+                    "title": title,
+                    "summary": " ".join(description.split()),
+                    "article_url": link,
+                    "source_site": parsed_source,
+                    "publish_time": published.strftime("%Y-%m-%d %H:%M:%S") if published else published_text,
+                    "_source": "Google News RSS",
+                }
+            )
+            if len(rows) >= limit:
+                break
+        return rows
+
+    def _split_google_title(self, title: str, fallback_source: str) -> tuple[str, str]:
+        if " - " not in title:
+            return title, fallback_source
+        body, source = title.rsplit(" - ", 1)
+        return body.strip() or title, source.strip() or fallback_source
+
+    def _parse_rss_time(self, value: str) -> datetime | None:
+        try:
+            parsed = email.utils.parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=BEIJING_TZ)
+        return parsed.astimezone(BEIJING_TZ)
 
     def _broad_news_queries(self, query: str) -> list[str]:
         terms = self._query_terms(query)
