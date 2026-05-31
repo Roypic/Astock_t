@@ -608,7 +608,8 @@ class MonitorApp:
 
         updates_dir = app_dir() / "updates"
         updates_dir.mkdir(parents=True, exist_ok=True)
-        target = updates_dir / f"{EXE_ASSET_NAME}.download"
+        suffix = release_short or datetime.now(BEIJING_TZ).strftime("%Y%m%d%H%M%S")
+        target = updates_dir / f"AShareTSignalMonitor-{suffix}.exe"
         req = urllib.request.Request(download_url, headers={"User-Agent": "AShareTSignalMonitor/1.0"})
         with urllib.request.urlopen(req, timeout=60) as resp, target.open("wb") as out:
             shutil.copyfileobj(resp, out)
@@ -625,52 +626,11 @@ class MonitorApp:
         }
 
     def _install_update(self, update_file: Path) -> None:
-        current_exe = Path(sys.executable).resolve()
-        updater_dir = app_dir() / "updates"
-        updater_dir.mkdir(parents=True, exist_ok=True)
-        batch = updater_dir / "apply_update.bat"
-        script = f"""@echo off
-setlocal
-chcp 65001 >nul
-set "SRC={update_file}"
-set "DST={current_exe}"
-set "APPDIR={app_dir()}"
-set "OLD={current_exe}.old"
-set "LOG={app_dir()}\\update.log"
-set "PID={os.getpid()}"
-set "BAT=%~f0"
-echo [%date% %time%] update started > "%LOG%"
-for /l %%i in (1,1,20) do (
-  tasklist /fi "PID eq %PID%" | find "%PID%" >nul
-  if errorlevel 1 goto replace
-  timeout /t 1 /nobreak >nul
-)
-taskkill /pid %PID% /f >nul 2>nul
-timeout /t 1 /nobreak >nul
-:replace
-if not exist "%SRC%" goto failed
-if exist "%OLD%" del /f /q "%OLD%" >nul 2>nul
-move /y "%DST%" "%OLD%" >> "%LOG%" 2>&1
-move /y "%SRC%" "%DST%" >> "%LOG%" 2>&1
-if errorlevel 1 goto restore
-start "" "%DST%"
-del /f /q "%OLD%" >nul 2>nul
-del /f /q "%BAT%" >nul 2>nul
-exit /b 0
-:restore
-if exist "%OLD%" if not exist "%DST%" move /y "%OLD%" "%DST%" >> "%LOG%" 2>&1
-:failed
-echo [%date% %time%] update failed >> "%LOG%"
-start "" "%APPDIR%"
-mshta "javascript:alert('自动更新失败，请手动下载最新版覆盖。详情见 update.log');close()"
-exit /b 1
-"""
-        batch.write_text(script, encoding="gbk", errors="ignore")
         flags = 0
         if os.name == "nt":
-            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-        subprocess.Popen(["cmd.exe", "/c", str(batch)], cwd=str(app_dir()), creationflags=flags)
-        os._exit(0)
+            flags = getattr(subprocess, "DETACHED_PROCESS", 0)
+        subprocess.Popen([str(update_file)], cwd=str(update_file.parent), creationflags=flags)
+        self.root.after(300, self.root.destroy)
 
     def _run_info_premarket(self) -> None:
         try:
@@ -1082,7 +1042,7 @@ exit /b 1
                 sha = info.get("sha", "-")
                 should_install = messagebox.askyesno(
                     "更新程序",
-                    f"新版已下载。\n版本：{sha}\n更新时间：{updated_at}\n\n是否现在退出并安装更新？",
+                    f"新版已下载。\n版本：{sha}\n更新时间：{updated_at}\n\n是否现在打开新版？当前窗口会关闭，旧版文件会保留。",
                 )
                 if should_install and update_file.exists():
                     self._install_update(update_file)
