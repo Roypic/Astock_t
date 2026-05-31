@@ -545,36 +545,115 @@ class MonitorApp:
         if not download_url:
             raise RuntimeError("最新版 EXE 缺少下载链接")
 
-        target = app_dir() / f"{EXE_ASSET_NAME}.download"
+        updates_dir = app_dir() / "updates"
+        updates_dir.mkdir(parents=True, exist_ok=True)
+        target = updates_dir / f"{EXE_ASSET_NAME}.download"
         req = urllib.request.Request(download_url, headers={"User-Agent": "AShareTSignalMonitor/1.0"})
         with urllib.request.urlopen(req, timeout=60) as resp, target.open("wb") as out:
             shutil.copyfileobj(resp, out)
         if target.stat().st_size < 1024 * 1024:
             raise RuntimeError("下载文件过小，可能不是有效 EXE")
+        with target.open("rb") as handle:
+            if handle.read(2) != b"MZ":
+                raise RuntimeError("下载文件不是有效 Windows EXE，请稍后重试")
         return target, str(asset.get("updated_at") or release.get("published_at") or "-")
 
     def _install_update(self, update_file: Path) -> None:
         current_exe = Path(sys.executable).resolve()
-        batch = app_dir() / "apply_update.bat"
+        updater_dir = app_dir() / "updates"
+        updater_dir.mkdir(parents=True, exist_ok=True)
+        batch = updater_dir / "apply_update.bat"
+        powershell = updater_dir / "apply_update.ps1"
+
+        def ps_quote(value: object) -> str:
+            return "'" + str(value).replace("'", "''") + "'"
+
+        ps_script = f"""
+$ErrorActionPreference = "Stop"
+$Src = {ps_quote(update_file)}
+$Dst = {ps_quote(current_exe)}
+$PidToWait = {os.getpid()}
+$AppDir = Split-Path -Parent $Dst
+$Old = "$Dst.old"
+$Log = Join-Path $AppDir "update.log"
+
+function Write-UpdateLog($Message) {{
+  $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+  Add-Content -Path $Log -Value "[$stamp] $Message" -Encoding UTF8
+}}
+
+try {{
+  Write-UpdateLog "waiting for process $PidToWait to exit"
+  $process = Get-Process -Id $PidToWait -ErrorAction SilentlyContinue
+  if ($process) {{
+    Wait-Process -Id $PidToWait -Timeout 45 -ErrorAction SilentlyContinue
+  }}
+  Start-Sleep -Milliseconds 1200
+
+  if (!(Test-Path $Src)) {{
+    throw "找不到下载好的更新文件：$Src"
+  }}
+
+  $stream = [System.IO.File]::OpenRead($Src)
+  try {{
+    if ($stream.Length -lt 1048576) {{
+      throw "更新文件太小，可能下载不完整"
+    }}
+    $first = $stream.ReadByte()
+    $second = $stream.ReadByte()
+    if ($first -ne 77 -or $second -ne 90) {{
+      throw "更新文件不是有效 EXE"
+    }}
+  }} finally {{
+    $stream.Close()
+  }}
+
+  $installed = $false
+  for ($i = 0; $i -lt 30; $i++) {{
+    try {{
+      if (Test-Path $Old) {{
+        Remove-Item $Old -Force
+      }}
+      Move-Item $Dst $Old -Force
+      Move-Item $Src $Dst -Force
+      $installed = $true
+      Write-UpdateLog "updated successfully"
+      break
+    }} catch {{
+      Write-UpdateLog "replace retry $i failed: $($_.Exception.Message)"
+      if ((Test-Path $Old) -and !(Test-Path $Dst)) {{
+        Move-Item $Old $Dst -Force
+      }}
+      Start-Sleep -Seconds 1
+    }}
+  }}
+
+  if (!$installed) {{
+    throw "替换 EXE 失败，请关闭程序后手动下载最新版"
+  }}
+
+  Start-Process -FilePath $Dst -WorkingDirectory $AppDir
+  Start-Sleep -Seconds 2
+  if (Test-Path $Old) {{
+    Remove-Item $Old -Force
+  }}
+}} catch {{
+  Write-UpdateLog "update failed: $($_.Exception.Message)"
+  Add-Type -AssemblyName PresentationFramework
+  [System.Windows.MessageBox]::Show("自动更新失败：$($_.Exception.Message)`n`n可手动下载最新版覆盖安装。", "更新失败") | Out-Null
+}}
+"""
+        powershell.write_text(ps_script.strip() + "\n", encoding="utf-8")
         script = f"""@echo off
 setlocal
-set "SRC={update_file}"
-set "DST={current_exe}"
 set "BAT=%~f0"
-timeout /t 2 /nobreak >nul
-:retry
-copy /y "%SRC%" "%DST%" >nul
-if errorlevel 1 (
-  timeout /t 1 /nobreak >nul
-  goto retry
-)
-del "%SRC%" >nul 2>nul
-start "" "%DST%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "{powershell}"
 del "%BAT%" >nul 2>nul
 """
         batch.write_text(script, encoding="gbk", errors="ignore")
         subprocess.Popen(["cmd", "/c", str(batch)], cwd=str(app_dir()))
-        self.root.destroy()
+        self.root.after(200, self.root.destroy)
+        self.root.after(800, lambda: os._exit(0))
 
     def _run_info_premarket(self) -> None:
         try:
