@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from http.client import IncompleteRead
 import json
 import urllib.parse
 import urllib.request
@@ -692,6 +693,23 @@ class MonitorApp:
         return "\n".join(lines)
 
     def _search_news(self, query: str, start: datetime, end: datetime, limit: int = 5) -> list[dict[str, object]]:
+        last_error: Exception | None = None
+        requested_limits = []
+        for value in (limit, min(limit, 20), min(limit, 12), min(limit, 6)):
+            if value > 0 and value not in requested_limits:
+                requested_limits.append(value)
+        for attempt, request_limit in enumerate(requested_limits, start=1):
+            try:
+                data = self._fetch_news_json(query, start, end, request_limit)
+                return self._extract_news_items(data)
+            except (IncompleteRead, json.JSONDecodeError, TimeoutError, OSError) as exc:
+                last_error = exc
+                time.sleep(min(0.4 * attempt, 1.2))
+        if last_error:
+            raise RuntimeError(f"新闻接口读取失败，请稍后重试：{last_error}") from last_error
+        return []
+
+    def _fetch_news_json(self, query: str, start: datetime, end: datetime, limit: int) -> object:
         params = {
             "query": query,
             "limit": str(limit),
@@ -700,9 +718,28 @@ class MonitorApp:
             "end_time": end.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
         }
         url = NEWS_SEARCH_URL + "?" + urllib.parse.urlencode(params)
-        req = urllib.request.Request(url, headers={"User-Agent": "AShareTSignalMonitor/1.0"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "AShareTSignalMonitor/1.0",
+                "Accept": "application/json",
+                "Accept-Encoding": "identity",
+                "Connection": "close",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=18) as resp:
+            try:
+                raw = resp.read()
+            except IncompleteRead as exc:
+                raw = exc.partial
+                if not raw:
+                    raise
+            text = raw.decode("utf-8", errors="ignore").strip()
+            if not text:
+                return []
+            return json.loads(text)
+
+    def _extract_news_items(self, data: object) -> list[dict[str, object]]:
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
         if isinstance(data, dict):
