@@ -532,6 +532,7 @@ class MonitorApp:
 
         query_var = tk.StringVar()
         days_var = tk.StringVar(value="3")
+        broad_var = tk.BooleanVar(value=True)
         status_var = tk.StringVar(value="输入股票名/代码/主题关键词后搜索。")
 
         ttk.Label(panel, text="关键词", style="Muted.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
@@ -539,6 +540,17 @@ class MonitorApp:
         entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 10))
         ttk.Label(panel, text="天数", style="Muted.TLabel").grid(row=0, column=2, sticky=tk.E, padx=(0, 8))
         ttk.Entry(panel, textvariable=days_var, width=6).grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
+        tk.Checkbutton(
+            panel,
+            text="宽泛+摘要",
+            variable=broad_var,
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            activebackground=COLORS["card"],
+            activeforeground=COLORS["text"],
+            selectcolor=COLORS["card_soft"],
+            font=("Microsoft YaHei UI", 9),
+        ).grid(row=0, column=4, sticky=tk.W, padx=(0, 10))
 
         result = tk.Text(
             window,
@@ -578,25 +590,26 @@ class MonitorApp:
 
             def worker() -> None:
                 try:
-                    content = self._build_custom_info_report(query, days)
+                    content = self._build_custom_info_report(query, days, broad=broad_var.get())
                     self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": content}))
                 except Exception as exc:
                     self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": f"搜索失败：{exc}"}))
 
             threading.Thread(target=worker, daemon=True).start()
 
-        ttk.Button(panel, text="搜索", style="Primary.TButton", command=run_search).grid(row=0, column=4, sticky=tk.E)
+        ttk.Button(panel, text="搜索", style="Primary.TButton", command=run_search).grid(row=0, column=5, sticky=tk.E)
         entry.bind("<Return>", lambda _event: run_search())
         entry.focus_set()
 
-    def _build_custom_info_report(self, query: str, days: int) -> str:
+    def _build_custom_info_report(self, query: str, days: int, broad: bool = False) -> str:
         now = datetime.now(BEIJING_TZ)
         start = now - timedelta(days=days)
-        candidates = self._search_news(query, start, now, limit=36)
-        items = self._rerank_news(query, candidates, limit=12)
+        candidates = self._search_broad_news(query, start, now) if broad else self._search_news(query, start, now, limit=36)
+        items = self._rerank_news(query, candidates, limit=20 if broad else 12, broad=broad)
+        mode = "宽泛语义检索 + 本地轻量摘要" if broad else "新闻语义检索 + 本地精准匹配过滤"
         lines = [
             f"自选信息面：{query}",
-            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')}，范围：最近 {days} 天新闻语义检索 + 本地精准匹配过滤。",
+            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')}，范围：最近 {days} 天{mode}。",
             "仅支持查看最近半个月以内的新闻数据。",
             f"候选 {len(candidates)} 条，精准匹配后保留 {len(items)} 条。",
             "",
@@ -604,6 +617,11 @@ class MonitorApp:
         if not items:
             lines.append("暂未检索到相关新闻。可以换成公司简称、股票代码或行业关键词再试。")
             return "\n".join(lines)
+
+        if broad:
+            lines.extend(self._local_news_summary(query, items))
+            lines.append("")
+            lines.append("新闻明细：")
 
         stance_counts = {"利好": 0, "风险": 0, "中性": 0}
         for item in items:
@@ -833,11 +851,73 @@ class MonitorApp:
         candidates = self._search_news(query, start, end, limit=candidate_limit)
         return self._rerank_news(query, candidates, limit=limit)
 
-    def _rerank_news(self, query: str, items: list[dict[str, object]], limit: int) -> list[dict[str, object]]:
+    def _search_broad_news(self, query: str, start: datetime, end: datetime) -> list[dict[str, object]]:
+        queries = self._broad_news_queries(query)
+        seen = set()
+        results = []
+        for index, search_query in enumerate(queries):
+            per_limit = 24 if index == 0 else 12
+            try:
+                items = self._search_news(search_query, start, end, limit=per_limit)
+            except Exception as exc:
+                self.queue.put(("log", f"宽泛搜索子查询失败：{search_query}｜{exc}"))
+                continue
+            for item in items:
+                key = item.get("article_url") or item.get("news_id") or item.get("title")
+                if key in seen:
+                    continue
+                seen.add(key)
+                copied = dict(item)
+                copied["_query"] = search_query
+                results.append(copied)
+        return results
+
+    def _broad_news_queries(self, query: str) -> list[str]:
+        terms = self._query_terms(query)
+        profile = self._news_profile_for_query(query)
+        queries = [query]
+        if profile:
+            required = [word for word in profile.get("required", ()) if word in query]
+            company = required[0] if required else str(profile.get("required", ("",))[0])
+            themes = list(profile.get("theme", ()))
+            queries.extend(
+                [
+                    company,
+                    f"{company} {' '.join(themes[:2])}".strip(),
+                    f"{company} {' '.join(themes[2:5])}".strip(),
+                    " ".join(themes[:4]),
+                ]
+            )
+        primary_terms = [
+            term
+            for term in terms
+            if term not in NEWS_THEME_TERMS and len(term) >= 3 and not term.lower().startswith(("ai", "cpo"))
+        ]
+        theme_terms = [term for term in terms if term in NEWS_THEME_TERMS or term.upper() in ("AI", "CPO")]
+        if primary_terms:
+            primary = primary_terms[0]
+            queries.append(primary)
+            if theme_terms:
+                queries.append(f"{primary} {' '.join(theme_terms[:3])}")
+        if theme_terms:
+            queries.append(" ".join(theme_terms[:4]))
+
+        deduped = []
+        for item in queries:
+            normalized = " ".join(item.split())
+            if normalized and normalized not in deduped:
+                deduped.append(normalized)
+        return deduped[:5]
+
+    def _rerank_news(self, query: str, items: list[dict[str, object]], limit: int, broad: bool = False) -> list[dict[str, object]]:
         scored: list[tuple[float, str, dict[str, object]]] = []
         for item in items:
             score = self._news_relevance_score(query, item)
-            if score < self._news_relevance_threshold(query):
+            if broad:
+                source_query = str(item.get("_query") or "")
+                if source_query and source_query != query:
+                    score = max(score, self._news_relevance_score(source_query, item) * 0.85)
+            if score < self._news_relevance_threshold(query, broad=broad):
                 continue
             copied = dict(item)
             copied["_relevance_score"] = round(score, 1)
@@ -846,21 +926,21 @@ class MonitorApp:
         scored.sort(key=lambda row: (row[0], row[1]), reverse=True)
         return [item for _score, _publish, item in scored[:limit]]
 
-    def _news_relevance_threshold(self, query: str) -> float:
+    def _news_relevance_threshold(self, query: str, broad: bool = False) -> float:
         profile = self._news_profile_for_query(query)
         if profile:
-            return 3.2
+            return 1.8 if broad else 3.2
         primary_terms = [
             term
             for term in self._query_terms(query)
             if term not in NEWS_THEME_TERMS and len(term) >= 3 and not term.lower().startswith(("ai", "cpo"))
         ]
         if primary_terms:
-            return 3.0
-        return 2.0 if any(term in query for term in NEWS_THEME_TERMS) else 2.4
+            return 1.8 if broad else 3.0
+        return 1.5 if broad else 2.0 if any(term in query for term in NEWS_THEME_TERMS) else 2.4
 
     def _news_relevance_score(self, query: str, item: dict[str, object]) -> float:
-        text = self._news_text(item)
+        text = self._news_body_text(item)
         title = str(item.get("title") or "")
         terms = self._query_terms(query)
         profile = self._news_profile_for_query(query)
@@ -909,6 +989,54 @@ class MonitorApp:
             score -= 0.8
         return score
 
+    def _local_news_summary(self, query: str, items: list[dict[str, object]]) -> list[str]:
+        stance_counts = {"利好": 0, "风险": 0, "中性": 0}
+        risk_hits: dict[str, int] = {}
+        positive_hits: dict[str, int] = {}
+        theme_hits: dict[str, int] = {}
+        for item in items:
+            stance_counts[self._news_stance(item)] += 1
+            text = self._news_body_text(item)
+            for word in SEVERE_NEGATIVE_TERMS:
+                if word in text:
+                    risk_hits[word] = risk_hits.get(word, 0) + 1
+            for word in ("增长", "中标", "突破", "订单", "扩产", "涨价", "合作", "回购", "增持", "景气"):
+                if word in text:
+                    positive_hits[word] = positive_hits.get(word, 0) + 1
+            for word in NEWS_THEME_TERMS:
+                if word in text:
+                    theme_hits[word] = theme_hits.get(word, 0) + 1
+
+        def top_words(mapping: dict[str, int], limit: int = 5) -> str:
+            pairs = sorted(mapping.items(), key=lambda row: (-row[1], row[0]))[:limit]
+            return "、".join(f"{word}({count})" for word, count in pairs) if pairs else "无明显集中项"
+
+        total = max(1, len(items))
+        risk_ratio = stance_counts["风险"] / total
+        positive_ratio = stance_counts["利好"] / total
+        if risk_ratio >= 0.45:
+            bias = "偏风险"
+        elif positive_ratio >= 0.45:
+            bias = "偏利好"
+        else:
+            bias = "中性偏观察"
+
+        top_items = sorted(
+            items,
+            key=lambda item: float(item.get("_relevance_score") or 0),
+            reverse=True,
+        )[:3]
+        representative = "；".join(self._clean_text(str(item.get("title") or "无标题"), 36) for item in top_items)
+        return [
+            "本地轻量摘要：",
+            f"- 综合情绪：{bias}；利好 {stance_counts['利好']} 条 / 风险 {stance_counts['风险']} 条 / 中性 {stance_counts['中性']} 条。",
+            f"- 相关主题：{top_words(theme_hits)}。",
+            f"- 风险关键词：{top_words(risk_hits)}。",
+            f"- 利好关键词：{top_words(positive_hits)}。",
+            f"- 代表新闻：{representative or '暂无'}。",
+            "- 说明：这是本地小模型按标题/摘要/关键词生成的摘要，不调用外部 LLM；重要事项仍需点开原文和公告核对。",
+        ]
+
     def _news_profile_for_query(self, query: str) -> dict[str, tuple[str, ...]] | None:
         for profile in NEWS_PROFILES.values():
             if any(alias and alias in query for alias in profile.get("aliases", ())):
@@ -921,6 +1049,16 @@ class MonitorApp:
             item.get("summary", ""),
             item.get("content", ""),
             item.get("_query", ""),
+            item.get("source_site", ""),
+            item.get("media_name", ""),
+        )
+        return " ".join(str(value) for value in values if value)
+
+    def _news_body_text(self, item: dict[str, object]) -> str:
+        values = (
+            item.get("title", ""),
+            item.get("summary", ""),
+            item.get("content", ""),
             item.get("source_site", ""),
             item.get("media_name", ""),
         )
