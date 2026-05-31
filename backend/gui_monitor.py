@@ -8,9 +8,11 @@ import sys
 import threading
 import time
 import json
+import urllib.parse
+import urllib.request
 import webbrowser
 import tkinter as tk
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -20,6 +22,15 @@ from notifier import PushPlusNotifier
 
 DEFAULT_INTERVAL_SECONDS = 30
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
+NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
+INFO_QUERIES = (
+    "剑桥科技 CPO 光模块",
+    "东山精密 PCB AI服务器 光模块",
+    "福晶科技 激光晶体 光学 光通信",
+    "利通电子 PCB 电子元器件 AI服务器",
+    "CPO 光模块 AI算力",
+    "PCB AI服务器",
+)
 COLORS = {
     "bg": "#F6F3EC",
     "card": "#FFFDF7",
@@ -191,7 +202,8 @@ class MonitorApp:
 
         controls = ttk.Frame(outer)
         controls.pack(fill=tk.X, pady=(0, 12))
-        ttk.Button(controls, text="盘前分析", style="Ghost.TButton", command=self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls, text="模型盘前", style="Ghost.TButton", command=self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls, text="信息面盘前", style="Ghost.TButton", command=self._show_info_premarket).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
         ttk.Button(controls, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=8)
         ttk.Button(controls, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
@@ -382,6 +394,133 @@ class MonitorApp:
         self._log("已生成盘前分析")
         self._open_text_window("盘前分析", analysis)
 
+    def _show_info_premarket(self) -> None:
+        self.status_var.set("正在获取信息面")
+        self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["sage_dark"])
+        self._log("正在获取信息面盘前摘要")
+        threading.Thread(target=self._run_info_premarket, daemon=True).start()
+
+    def _run_info_premarket(self) -> None:
+        try:
+            content = self._build_info_premarket()
+            self.queue.put(("info_premarket", content))
+            self.queue.put(("log", "信息面盘前摘要已生成"))
+        except Exception as exc:
+            self.queue.put(("log", f"信息面盘前失败：{exc}"))
+            self.queue.put(("info_error", str(exc)))
+
+    def _build_info_premarket(self) -> str:
+        now = datetime.now(BEIJING_TZ)
+        start = now - timedelta(days=3)
+        results = []
+        seen = set()
+        for query in INFO_QUERIES:
+            for item in self._search_news(query, start, now, limit=5):
+                key = item.get("article_url") or item.get("news_id") or item.get("title")
+                if key in seen:
+                    continue
+                seen.add(key)
+                item["_query"] = query
+                results.append(item)
+
+        results.sort(key=lambda item: str(item.get("publish_time") or item.get("fetch_time") or ""), reverse=True)
+        lines = [
+            f"信息面盘前汇总（北京时间 {now.strftime('%Y-%m-%d %H:%M')}）",
+            "范围：最近3天新闻语义检索；仅支持查看最近半个月以内的新闻数据。",
+            "",
+        ]
+        if not results:
+            lines.append("暂未检索到相关信息。盘中仍按实时信号和个人风控执行。")
+            return "\n".join(lines)
+
+        grouped = self._group_news(results[:24])
+        for group_name in ("剑桥科技", "东山精密", "福晶科技", "利通电子", "CPO/光模块", "PCB/AI服务器", "其他"):
+            items = grouped.get(group_name, [])
+            if not items:
+                continue
+            lines.append(f"{group_name}：")
+            stance_counts = {"利好": 0, "风险": 0, "中性": 0}
+            for item in items[:5]:
+                stance = self._news_stance(item)
+                stance_counts[stance] += 1
+                title = self._clean_text(str(item.get("title") or "无标题"), 70)
+                source = item.get("source_site") or item.get("media_name") or "未知来源"
+                publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
+                url = item.get("article_url") or ""
+                lines.append(f"- [{stance}] {publish} {source}：{title}")
+                if url:
+                    lines.append(f"  {url}")
+            summary = " / ".join(f"{k}{v}" for k, v in stance_counts.items() if v)
+            lines.append(f"  小结：{summary or '中性'}；盘前只看信息方向，入场仍等待盘中模型信号。")
+            lines.append("")
+
+        lines.append("风险提醒：新闻标题和摘要只能辅助判断情绪，不能替代公告原文、交易所披露和盘中量价确认。")
+        return "\n".join(lines)
+
+    def _search_news(self, query: str, start: datetime, end: datetime, limit: int = 5) -> list[dict[str, object]]:
+        params = {
+            "query": query,
+            "limit": str(limit),
+            "year": str(end.year),
+            "start_time": start.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+            "end_time": end.strftime("%Y-%m-%dT%H:%M:%S+08:00"),
+        }
+        url = NEWS_SEARCH_URL + "?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(url, headers={"User-Agent": "AShareTSignalMonitor/1.0"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            for key in ("data", "results", "items"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    return [item for item in value if isinstance(item, dict)]
+        return []
+
+    def _group_news(self, items: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
+        groups: dict[str, list[dict[str, object]]] = {
+            "剑桥科技": [],
+            "东山精密": [],
+            "福晶科技": [],
+            "利通电子": [],
+            "CPO/光模块": [],
+            "PCB/AI服务器": [],
+            "其他": [],
+        }
+        for item in items:
+            text = f"{item.get('title', '')} {item.get('summary', '')} {item.get('content', '')} {item.get('_query', '')}"
+            placed = False
+            for name in ("剑桥科技", "东山精密", "福晶科技", "利通电子"):
+                if name in text:
+                    groups[name].append(item)
+                    placed = True
+            if any(word in text for word in ("CPO", "光模块", "光通信", "算力")):
+                groups["CPO/光模块"].append(item)
+                placed = True
+            if any(word in text for word in ("PCB", "AI服务器", "服务器", "电子元器件")):
+                groups["PCB/AI服务器"].append(item)
+                placed = True
+            if not placed:
+                groups["其他"].append(item)
+        return groups
+
+    def _news_stance(self, item: dict[str, object]) -> str:
+        text = f"{item.get('title', '')} {item.get('summary', '')} {item.get('content', '')}"
+        positive = ("增长", "中标", "突破", "新高", "扩产", "订单", "涨价", "景气", "利好", "放量", "上调", "合作", "并购")
+        negative = ("减持", "亏损", "下滑", "风险", "处罚", "问询", "诉讼", "终止", "跌", "降价", "延期", "利空")
+        pos = sum(1 for word in positive if word in text)
+        neg = sum(1 for word in negative if word in text)
+        if pos > neg:
+            return "利好"
+        if neg > pos:
+            return "风险"
+        return "中性"
+
+    def _clean_text(self, value: str, limit: int) -> str:
+        text = " ".join(value.split())
+        return text if len(text) <= limit else text[: limit - 1] + "…"
+
     def _build_premarket_analysis(self, model_path: Path) -> str:
         files = self._model_files(model_path)
         if not files:
@@ -527,6 +666,14 @@ class MonitorApp:
                 messagebox.showerror("启动失败", str(payload))
             elif kind == "risk":
                 self.risk_var.set(str(payload))
+            elif kind == "info_premarket":
+                self.status_var.set("信息面盘前完成")
+                self.status_badge.configure(bg=COLORS["mint"], fg=COLORS["sage_dark"])
+                self._open_text_window("信息面盘前", str(payload))
+            elif kind == "info_error":
+                self.status_var.set("信息面获取失败")
+                self.status_badge.configure(bg="#F5DDDD", fg=COLORS["danger"])
+                messagebox.showerror("信息面盘前失败", str(payload))
             elif kind == "stopped":
                 self.status_var.set("已停止")
                 self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["muted"])
