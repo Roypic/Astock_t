@@ -11,6 +11,7 @@ import threading
 import time
 import html
 import email.utils
+import hashlib
 import xml.etree.ElementTree as ET
 from http.client import IncompleteRead
 import json
@@ -323,6 +324,7 @@ class MonitorApp:
         self.news_worker: threading.Thread | None = None
         self.market_worker: threading.Thread | None = None
         self.seen_intraday_news: set[str] = set()
+        self.seen_rumor_events: dict[str, dict[str, object]] = {}
         self.seen_market_alerts: set[str] = set()
         self.news_monitor_started_at: datetime | None = None
         self.models_dir = ensure_default_models()
@@ -888,35 +890,40 @@ class MonitorApp:
                 copied = dict(item)
                 copied.update(score)
                 scored.append(copied)
-            event = self._build_rumor_event(name, profile, scored, client, now)
+            events = self._cluster_rumor_events(name, profile, scored, client, now)
             lines.append(f"{name}：")
-            if not event:
+            if not events:
                 lines.append("- 暂未发现明显小作文/传闻扩散线索。")
                 lines.append("")
                 continue
-            market = event.get("market") if isinstance(event.get("market"), dict) else {}
-            lines.append(
-                f"- 热度 {event.get('rumor_heat')}/100｜可信度 {event.get('credibility')}/100｜"
-                f"杀伤力 {event.get('impact_score')}/100｜官方反证/澄清 {event.get('contradiction')}/100"
-            )
-            lines.append(
-                f"- 类型：{event.get('event_type')}；来源数：{event.get('source_count')}；"
-                f"野源数：{event.get('wild_source_count', 0)}；"
-                f"行情共振：{market.get('minute', '-')} 近15分钟 {market.get('price_drop_15m', 0)}%，量能比 {market.get('volume_ratio', 1)}"
-            )
-            if int(event.get("wild_source_count") or 0) == 0:
-                lines.append("- 覆盖提示：未命中微博/X/股吧/雪球原始野源，当前结果可能只是正规新闻或聚合噪音。")
-            lines.append(f"- 核心主张：{event.get('claim', '未提取到明确主张')}")
-            lines.append(f"- 触发词：{event.get('trigger_words', '无明显触发词')}")
-            for item in event.get("items", [])[:5]:
-                title = self._clean_text(str(item.get("title") or "无标题"), 88)
-                source = item.get("source_site") or item.get("media_name") or item.get("_source") or "未知来源"
-                publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
-                url = item.get("article_url") or ""
-                source_type = "野源" if int(item.get("wild_score") or 0) else "正式/聚合"
-                lines.append(f"- 单条强度 {item.get('single_score')}｜{source_type}｜{publish}｜{source}：{title}")
-                if url:
-                    lines.append(f"  {url}")
+            for index, event in enumerate(events[:4], start=1):
+                market = event.get("market") if isinstance(event.get("market"), dict) else {}
+                lines.append(f"- 事件 {index}：{event.get('event_title', event.get('claim', '未提取到明确主张'))}")
+                lines.append(
+                    f"  热度 {event.get('rumor_heat')}/100｜可信度 {event.get('credibility')}/100｜"
+                    f"杀伤力 {event.get('impact_score')}/100｜官方反证/澄清 {event.get('contradiction')}/100"
+                )
+                lines.append(
+                    f"  类型：{event.get('event_type')}；来源数：{event.get('source_count')}；"
+                    f"野源数：{event.get('wild_source_count', 0)}；"
+                    f"时间：{event.get('first_seen', '-')} 至 {event.get('latest_seen', '-')}"
+                )
+                lines.append(
+                    f"  行情共振：{market.get('minute', '-')} 近15分钟 {market.get('price_drop_15m', 0)}%，量能比 {market.get('volume_ratio', 1)}"
+                )
+                if int(event.get("wild_source_count") or 0) == 0:
+                    lines.append("  覆盖提示：未命中微博/X/股吧/雪球原始野源，当前结果可能只是正规新闻或聚合噪音。")
+                lines.append(f"  核心主张：{event.get('claim', '未提取到明确主张')}")
+                lines.append(f"  触发词：{event.get('trigger_words', '无明显触发词')}")
+                for item in event.get("items", [])[:4]:
+                    title = self._clean_text(str(item.get("title") or "无标题"), 88)
+                    source = item.get("source_site") or item.get("media_name") or item.get("_source") or "未知来源"
+                    publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
+                    url = item.get("article_url") or ""
+                    source_type = "野源" if int(item.get("wild_score") or 0) else "正式/聚合"
+                    lines.append(f"  - 单条强度 {item.get('single_score')}｜{source_type}｜{publish}｜{source}：{title}")
+                    if url:
+                        lines.append(f"    {url}")
             lines.append("")
         return "\n".join(lines)
 
@@ -2336,6 +2343,7 @@ class MonitorApp:
         self.worker.start()
         if self.info_alert_var.get():
             self.seen_intraday_news.clear()
+            self.seen_rumor_events.clear()
             self.news_monitor_started_at = datetime.now(BEIJING_TZ)
             self.news_worker = threading.Thread(
                 target=self._run_intraday_news_worker,
@@ -2420,10 +2428,7 @@ class MonitorApp:
             scored = []
             for item in items:
                 key = str(item.get("article_url") or item.get("news_id") or item.get("title") or "")
-                if not key or key in self.seen_intraday_news:
-                    continue
-                published = self._parse_news_time(str(item.get("publish_time") or item.get("fetch_time") or ""))
-                if self.news_monitor_started_at and (not published or published < self.news_monitor_started_at):
+                if not key:
                     continue
                 if self._news_age_minutes(item, now) > 180:
                     continue
@@ -2433,17 +2438,55 @@ class MonitorApp:
                 copied = dict(item)
                 copied.update(score)
                 scored.append(copied)
-            event = self._build_rumor_event(name, profile, scored, client, now)
-            if not event:
-                continue
-            if event["rumor_heat"] < RUMOR_ALERT_HEAT_THRESHOLD and event["impact_score"] < RUMOR_ALERT_IMPACT_THRESHOLD:
-                continue
-            for item in event["items"]:
-                key = str(item.get("article_url") or item.get("news_id") or item.get("title") or "")
-                if key:
-                    self.seen_intraday_news.add(key)
-            alerts.append(self._format_intraday_news_alert(name, event, now))
+            for event in self._cluster_rumor_events(name, profile, scored, client, now):
+                should_alert, reason = self._rumor_event_should_alert(event, now)
+                if not should_alert:
+                    continue
+                for item in event["items"]:
+                    key = str(item.get("article_url") or item.get("news_id") or item.get("title") or "")
+                    if key:
+                        self.seen_intraday_news.add(key)
+                event["alert_reason"] = reason
+                alerts.append(self._format_intraday_news_alert(name, event, now))
         return alerts
+
+    def _rumor_event_should_alert(self, event: dict[str, object], now: datetime) -> tuple[bool, str]:
+        event_id = str(event.get("event_id") or "")
+        if not event_id:
+            return False, "缺少事件指纹"
+        heat = int(event.get("rumor_heat") or 0)
+        impact = int(event.get("impact_score") or 0)
+        credibility = int(event.get("credibility") or 0)
+        wild_count = int(event.get("wild_source_count") or 0)
+        market = event.get("market") if isinstance(event.get("market"), dict) else {}
+        market_resonance = float(market.get("price_drop_15m") or 0) <= -1.2 or float(market.get("volume_ratio") or 1) >= 1.8
+        sensitive_enough = (
+            heat >= RUMOR_ALERT_HEAT_THRESHOLD
+            or impact >= RUMOR_ALERT_IMPACT_THRESHOLD
+            or (wild_count > 0 and (heat >= 42 or impact >= 45))
+            or (market_resonance and (heat >= 38 or impact >= 42))
+            or (credibility >= 65 and impact >= 38)
+        )
+        if not sensitive_enough:
+            return False, "强度未达推送阈值"
+
+        latest_dt = self._parse_event_time(str(event.get("latest_seen") or ""))
+        if self.news_monitor_started_at and latest_dt and latest_dt < self.news_monitor_started_at:
+            return False, "事件发生在本轮监控启动前"
+
+        prev = self.seen_rumor_events.get(event_id)
+        current_score = max(heat, impact)
+        if not prev:
+            self.seen_rumor_events[event_id] = {"last_score": current_score, "last_seen": now.isoformat()}
+            return True, "本轮监控发现的新事件簇"
+
+        last_score = int(prev.get("last_score") or 0)
+        if current_score >= last_score + 12:
+            prev["last_score"] = current_score
+            prev["last_seen"] = now.isoformat()
+            return True, f"事件强度升级：{last_score} -> {current_score}"
+
+        return False, "已推送过且未明显升级"
 
     def _watched_news_profiles(self) -> dict[str, dict[str, tuple[str, ...]]]:
         text = self.news_watchlist_var.get().strip() if hasattr(self, "news_watchlist_var") else ""
@@ -2660,6 +2703,88 @@ class MonitorApp:
                 return label
         return "其他传闻"
 
+    def _cluster_rumor_events(
+        self,
+        name: str,
+        profile: dict[str, tuple[str, ...]],
+        items: list[dict[str, object]],
+        client: MarketClient,
+        now: datetime,
+    ) -> list[dict[str, object]]:
+        clusters: list[dict[str, object]] = []
+        for item in sorted(items, key=lambda row: int(row.get("single_score") or 0), reverse=True):
+            tokens = self._rumor_cluster_tokens(name, profile, item)
+            triggers = self._rumor_item_triggers(item)
+            event_type = str(item.get("event_type") or self._rumor_event_type(self._news_body_text(item)))
+            placed = False
+            for cluster in clusters:
+                overlap = self._rumor_cluster_overlap(tokens, cluster["tokens"])
+                trigger_overlap = len(triggers & cluster["triggers"])
+                same_type = event_type == cluster["event_type"]
+                if overlap >= 0.24 or (same_type and (overlap >= 0.10 or trigger_overlap >= 2)):
+                    cluster["items"].append(item)
+                    cluster["tokens"].update(tokens)
+                    cluster["triggers"].update(triggers)
+                    placed = True
+                    break
+            if not placed:
+                clusters.append({"event_type": event_type, "tokens": set(tokens), "triggers": set(triggers), "items": [item]})
+
+        events = []
+        for cluster in clusters:
+            event = self._build_rumor_event(name, profile, list(cluster["items"]), client, now)
+            if event:
+                event["event_id"] = self._rumor_cluster_id(name, str(cluster["event_type"]), cluster["tokens"], cluster["triggers"])
+                events.append(event)
+        events.sort(
+            key=lambda event: (
+                int(event.get("rumor_heat") or 0) + int(event.get("impact_score") or 0),
+                int(event.get("wild_source_count") or 0),
+            ),
+            reverse=True,
+        )
+        return events
+
+    def _rumor_cluster_tokens(
+        self,
+        name: str,
+        profile: dict[str, tuple[str, ...]],
+        item: dict[str, object],
+    ) -> set[str]:
+        text = self._news_body_text(item)
+        text = html.unescape(re.sub(r"<[^>]+>", " ", text))
+        for word in (name, *profile.get("aliases", ()), *profile.get("required", ())):
+            if word:
+                text = text.replace(word, " ")
+        text = re.sub(r"https?://\S+", " ", text)
+        text = re.sub(r"(东方财富|股吧|雪球|微博|证券时报|上海证券报|中国证券报|财联社|同花顺|新浪财经|腾讯新闻)", " ", text)
+        words = set(re.findall(r"[A-Za-z0-9]{2,}|[\u4e00-\u9fff]{2,}", text))
+        useful = {
+            word
+            for word in words
+            if word not in {"新闻", "财经", "公司", "股票", "市场", "今日", "一个", "这个", "相关", "链接"}
+        }
+        triggers = {word for word in (*RUMOR_WEAK_SOURCE_TERMS.keys(), *RUMOR_EVENT_TERMS.keys(), *SEVERE_NEGATIVE_TERMS.keys()) if word in text}
+        grams = self._char_grams("".join(sorted(useful))[:140])
+        return set(list(useful)[:40]) | triggers | set(list(grams)[:80])
+
+    def _rumor_cluster_overlap(self, left: set[str], right: set[str]) -> float:
+        if not left or not right:
+            return 0.0
+        return len(left & right) / max(1, min(len(left), len(right)))
+
+    def _rumor_item_triggers(self, item: dict[str, object]) -> set[str]:
+        text = self._news_body_text(item)
+        vocab = [*RUMOR_WEAK_SOURCE_TERMS.keys(), *RUMOR_EVENT_TERMS.keys(), *SEVERE_NEGATIVE_TERMS.keys()]
+        return {word for word in vocab if word in text}
+
+    def _rumor_cluster_id(self, name: str, event_type: str, tokens: set[str], triggers: set[str]) -> str:
+        stable_tokens = sorted(token for token in tokens if len(token) >= 2 and not re.fullmatch(r"\d+", token))[:18]
+        stable_triggers = sorted(triggers)[:10]
+        text = "|".join([name, event_type, *stable_triggers, *stable_tokens])
+        normalized = re.sub(r"\W+", "", text.lower())
+        return hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
     def _build_rumor_event(
         self,
         name: str,
@@ -2704,6 +2829,14 @@ class MonitorApp:
         dominant_type = max(event_types, key=event_types.get)
         claim = self._rumor_claim(name, top_items)
         trigger_words = self._rumor_trigger_words(top_items)
+        times = [
+            parsed
+            for item in top_items
+            if (parsed := self._parse_news_time(str(item.get("publish_time") or item.get("fetch_time") or "")))
+        ]
+        first_seen = min(times).strftime("%Y-%m-%d %H:%M") if times else "-"
+        latest_seen = max(times).strftime("%Y-%m-%d %H:%M") if times else "-"
+        event_id = self._rumor_event_id(name, dominant_type, claim, trigger_words, top_items)
         return {
             "items": top_items,
             "rumor_heat": rumor_heat,
@@ -2716,7 +2849,46 @@ class MonitorApp:
             "wild_source_count": wild_source_count,
             "claim": claim,
             "trigger_words": trigger_words,
+            "first_seen": first_seen,
+            "latest_seen": latest_seen,
+            "event_id": event_id,
+            "event_title": self._rumor_event_title(name, dominant_type, claim, top_items),
         }
+
+    def _rumor_event_id(
+        self,
+        name: str,
+        event_type: str,
+        claim: str,
+        trigger_words: str,
+        items: list[dict[str, object]],
+    ) -> str:
+        text = f"{name}|{event_type}|{claim}|{trigger_words}|"
+        for item in items[:3]:
+            text += self._clean_text(str(item.get("title") or ""), 48)
+        normalized = re.sub(r"\W+", "", text.lower())
+        return hashlib.sha1(normalized.encode("utf-8", errors="ignore")).hexdigest()[:16]
+
+    def _rumor_event_title(
+        self,
+        name: str,
+        event_type: str,
+        claim: str,
+        items: list[dict[str, object]],
+    ) -> str:
+        wild_sources = []
+        for item in items:
+            if int(item.get("wild_score") or 0) > 0:
+                source = str(item.get("source_site") or item.get("media_name") or item.get("_source") or "")
+                if source and source not in wild_sources:
+                    wild_sources.append(source)
+        source_hint = "/".join(wild_sources[:2]) if wild_sources else "新闻/聚合源"
+        return self._clean_text(f"{source_hint}出现{name}{event_type}：{claim}", 82)
+
+    def _parse_event_time(self, value: str) -> datetime | None:
+        if not value or value == "-":
+            return None
+        return self._parse_news_time(value if len(value) > 16 else f"{value}:00")
 
     def _rumor_claim(self, name: str, items: list[dict[str, object]]) -> str:
         if not items:
@@ -2824,10 +2996,13 @@ class MonitorApp:
             conclusion = "传闻杀伤力较强，真假未明也可能被短线资金交易。"
         else:
             conclusion = "暂属观察级异动，继续跟踪是否扩散和是否触发行情共振。"
+        alert_reason = str(event.get("alert_reason") or "达到盘中监控阈值")
         lines = [
             f"盘中小作文雷达：{name}",
             f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到疑似传闻/负面信息扩散。",
-            f"事件类型：{event.get('event_type', '其他传闻')}；来源数：{event.get('source_count', '-')}；野源数：{event.get('wild_source_count', 0)}",
+            f"事件标题：{event.get('event_title', event.get('claim', '未提取到明确主张'))}",
+            f"推送原因：{alert_reason}",
+            f"事件类型：{event.get('event_type', '其他传闻')}；来源数：{event.get('source_count', '-')}；野源数：{event.get('wild_source_count', 0)}；时间：{event.get('first_seen', '-')} 至 {event.get('latest_seen', '-')}",
             f"核心主张：{event.get('claim', '未提取到明确主张')}",
             f"触发词：{event.get('trigger_words', '无明显触发词')}",
             f"传闻热度：{rumor_heat}/100｜可信度：{credibility}/100｜杀伤力：{impact}/100｜官方反证/澄清强度：{contradiction}/100",
