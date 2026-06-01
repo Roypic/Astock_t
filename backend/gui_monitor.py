@@ -69,6 +69,26 @@ NEWS_PROFILES = {
         "theme": ("PCB", "AI服务器", "电子元器件", "服务器", "算力"),
     },
 }
+STOCK_CODE_HINTS = {
+    "云南锗业": "002428.SZ",
+    "云锗": "002428.SZ",
+    "驰宏锌锗": "600497.SH",
+    "中金岭南": "000060.SZ",
+    "有研新材": "600206.SH",
+    "江西铜业": "600362.SH",
+    "锡业股份": "000960.SZ",
+    "贵研铂业": "600459.SH",
+    "剑桥科技": "603083.SH",
+    "东山精密": "002384.SZ",
+    "福晶科技": "002222.SZ",
+    "利通电子": "603629.SH",
+}
+RESEARCH_PEERS = {
+    "002428.SZ": ("600497.SH", "000060.SZ", "600206.SH", "600362.SH"),
+}
+RESEARCH_THEMES = {
+    "002428.SZ": ("锗", "红外光学", "光纤级锗", "光伏级锗", "磷化铟", "砷化镓", "化合物半导体"),
+}
 NEWS_THEME_TERMS = (
     "CPO",
     "光模块",
@@ -305,6 +325,7 @@ class MonitorApp:
         ttk.Button(controls, text="模型盘前", style="Ghost.TButton", command=self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="信息面盘前", style="Ghost.TButton", command=self._show_info_premarket).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="自选信息面", style="Ghost.TButton", command=self._open_custom_info_window).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls, text="AI研报", style="Ghost.TButton", command=self._open_research_report_window).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="更新程序", style="Ghost.TButton", command=self._check_update).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
         tk.Checkbutton(
@@ -652,6 +673,302 @@ class MonitorApp:
             ]
         )
         return "\n".join(lines)
+
+    def _open_research_report_window(self) -> None:
+        window = tk.Toplevel(self.root)
+        window.title("AI研报生成")
+        window.geometry("900x700")
+        window.configure(bg=COLORS["bg"])
+
+        panel = ttk.Frame(window, style="Card.TFrame", padding=14)
+        panel.pack(fill=tk.X, padx=14, pady=(14, 8))
+        panel.columnconfigure(1, weight=1)
+
+        query_var = tk.StringVar(value="云南锗业")
+        status_var = tk.StringVar(value="输入股票名或代码，生成一份多源信息面的本地 AI 研报。")
+
+        ttk.Label(panel, text="股票", style="Muted.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        entry = ttk.Entry(panel, textvariable=query_var)
+        entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 10))
+
+        result = tk.Text(
+            window,
+            wrap=tk.WORD,
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            relief=tk.FLAT,
+            padx=16,
+            pady=14,
+            font=("Microsoft YaHei UI", 10),
+        )
+        result.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
+        tk.Label(
+            window,
+            textvariable=status_var,
+            bg=COLORS["bg"],
+            fg=COLORS["muted"],
+            anchor=tk.W,
+            font=("Microsoft YaHei UI", 9),
+        ).pack(fill=tk.X, padx=16, pady=(0, 10))
+
+        def run_report() -> None:
+            query = query_var.get().strip()
+            if not query:
+                messagebox.showwarning("缺少股票", "请输入股票名称或代码，例如 云南锗业 / 002428.SZ。")
+                return
+            result.configure(state=tk.NORMAL)
+            result.delete("1.0", tk.END)
+            result.insert(tk.END, "正在抓取多源信息并生成研报，请稍候...\n")
+            result.configure(state=tk.DISABLED)
+            status_var.set("正在生成 AI 研报...")
+
+            def worker() -> None:
+                try:
+                    content = self._build_research_report(query)
+                    self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": content}))
+                except Exception as exc:
+                    self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": f"研报生成失败：{exc}"}))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        ttk.Button(panel, text="生成研报", style="Primary.TButton", command=run_report).grid(row=0, column=2, sticky=tk.E)
+        entry.bind("<Return>", lambda _event: run_report())
+        entry.focus_set()
+
+    def _build_research_report(self, query: str) -> str:
+        now = datetime.now(BEIJING_TZ)
+        code = self._resolve_stock_code(query)
+        info = self._fetch_security_info(code) if code else {}
+        name = str(info.get("symbol_name") or query)
+        themes = RESEARCH_THEMES.get(str(info.get("symbol") or code), self._query_terms(query) or (query,))
+        industry_ranked = self._collect_research_items(name, themes, now)
+        peers = self._research_peers_for(code)
+        peer_infos = [self._fetch_security_info(peer) for peer in peers]
+        peer_infos = [item for item in peer_infos if item]
+
+        lines = [
+            f"{name}（{info.get('symbol', code or '代码未知')}）AI研报草稿",
+            f"生成时间：北京时间 {now.strftime('%Y-%m-%d %H:%M')}",
+            "流程：LLMQuant 风格多模块路由 = 行业/市场规模 -> 公司现状 -> 同行差异 -> 同行估值 -> 预期与风险。",
+            "数据源：FTShare/ftai 行情估值 + FTShare 语义新闻 + Google News RSS；同花顺/东财信息通过公开新闻聚合源和网页标题线索进入摘要。",
+            "",
+        ]
+        lines.extend(self._research_snapshot(info))
+        lines.append("")
+        lines.extend(self._research_market_size_section(themes, industry_ranked))
+        lines.append("")
+        lines.extend(self._research_company_status_section(name, industry_ranked))
+        lines.append("")
+        lines.extend(self._research_peer_section(info, peer_infos))
+        lines.append("")
+        lines.extend(self._research_expectation_section(name, info, industry_ranked, peer_infos))
+        lines.append("")
+        lines.extend(self._research_sources_section(industry_ranked))
+        lines.append("")
+        lines.append("免责声明：这是本地小 AI 模型生成的研报草稿，只做信息整理和研究框架，不构成投资建议；估值和预期需以交易软件、公告原文和正式研报复核。")
+        return "\n".join(lines)
+
+    def _collect_research_items(self, name: str, themes: tuple[str, ...] | list[str], now: datetime) -> list[dict[str, object]]:
+        start = now - timedelta(days=14)
+        queries = [
+            name,
+            f"{name} 锗 磷化铟 砷化镓",
+            f"{name} 东方财富 同花顺 研报",
+            f"{name} 龙虎榜 资金 异动",
+            "锗 红外 光伏 光纤 半导体 市场规模",
+            "锗 出口管制 锗价 供需",
+            "磷化铟 砷化镓 化合物半导体 衬底",
+        ]
+        seen = set()
+        candidates = []
+        for search_query in queries:
+            for item in self._search_broad_news(search_query, start, now):
+                key = item.get("article_url") or item.get("news_id") or item.get("title")
+                if key in seen:
+                    continue
+                seen.add(key)
+                score = self._research_item_score(name, themes, item)
+                if score < 3.0:
+                    continue
+                copied = dict(item)
+                copied["_research_score"] = round(score, 1)
+                candidates.append(copied)
+        candidates.sort(
+            key=lambda item: (float(item.get("_research_score") or 0), str(item.get("publish_time") or item.get("fetch_time") or "")),
+            reverse=True,
+        )
+        return candidates[:24]
+
+    def _research_item_score(self, name: str, themes: tuple[str, ...] | list[str], item: dict[str, object]) -> float:
+        text = self._news_body_text(item)
+        title = str(item.get("title") or "")
+        score = 0.0
+        if name and name in text:
+            score += 7.0
+        core_terms = ("锗", "锗业", "磷化铟", "砷化镓", "化合物半导体", "光伏级锗", "红外级锗", "光纤级锗")
+        for word in core_terms:
+            if word in text:
+                score += 2.0
+            if word in title:
+                score += 1.2
+        for word in themes:
+            if word in ("红外光学", "光学", "光伏级锗", "光纤级锗", "磷化铟", "砷化镓", "化合物半导体") and word in text:
+                score += 0.8
+        irrelevant_terms = ("眼镜", "脱毛", "汽车皮革", "量子光学", "激光相互作用", "光学科技")
+        if any(word in text for word in irrelevant_terms) and name not in text and "锗" not in text:
+            score -= 5.0
+        return score
+
+    def _resolve_stock_code(self, query: str) -> str:
+        text = query.strip().upper()
+        if re.fullmatch(r"\d{6}\.(SZ|SH)", text):
+            return text
+        if re.fullmatch(r"\d{6}", text):
+            return f"{text}.SH" if text.startswith("6") else f"{text}.SZ"
+        return STOCK_CODE_HINTS.get(query.strip(), "")
+
+    def _fetch_security_info(self, symbol: str) -> dict[str, object]:
+        if not symbol:
+            return {}
+        url = f"https://ftai.chat/api/v1/market/security/{urllib.parse.quote(symbol)}/info"
+        req = urllib.request.Request(url, headers={"User-Agent": "AShareTSignalMonitor/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data if isinstance(data, dict) else {}
+
+    def _research_peers_for(self, code: str) -> tuple[str, ...]:
+        if code in RESEARCH_PEERS:
+            return RESEARCH_PEERS[code]
+        return tuple(symbol for symbol in ("600497.SH", "000060.SZ", "600206.SH") if symbol != code)
+
+    def _research_snapshot(self, info: dict[str, object]) -> list[str]:
+        if not info:
+            return ["一、行情估值快照", "- 未获取到行情估值数据。"]
+        return [
+            "一、行情估值快照",
+            f"- 最新价/收盘：{self._fmt_num(info.get('close'))}；涨跌幅：{self._fmt_pct_value(info.get('change_rate'))}；换手率：{self._fmt_pct_value(info.get('turnover_rate'))}。",
+            f"- 总市值：{self._fmt_money(info.get('market_cap'))}；流通市值：{self._fmt_money(info.get('float_a_market_cap'))}。",
+            f"- PE(TTM)：{self._fmt_num(info.get('pe_ttm'))}；PB：{self._fmt_num(info.get('pb'))}；每股净资产：{self._fmt_num(info.get('bvps'))}。",
+        ]
+
+    def _research_market_size_section(self, themes: tuple[str, ...] | list[str], items: list[dict[str, object]]) -> list[str]:
+        theme_text = "、".join(themes[:7])
+        market_terms = self._top_keyword_hits(items, ("市场规模", "需求", "供给", "出口管制", "红外", "光纤", "光伏", "半导体", "军工", "卫星", "AI", "涨价"))
+        return [
+            "二、市场规模与行业位置",
+            f"- 主题链条：{theme_text or '稀散金属/半导体材料'}。",
+            f"- 小 AI 摘要：近期信息主要围绕 {market_terms or '锗价、红外光学、光纤通信、光伏衬底及化合物半导体'} 展开。",
+            "- 研究判断：锗不是大众金属，核心看供给约束和高端应用放量；市场空间绝对值不如铜铝锂，但价格弹性和战略属性更强。",
+        ]
+
+    def _research_company_status_section(self, name: str, items: list[dict[str, object]]) -> list[str]:
+        positive = self._top_keyword_hits(items, ("合作", "扩产", "产能", "增长", "订单", "项目", "磷化铟", "砷化镓", "光伏级", "红外级"))
+        risk = self._top_keyword_hits(items, ("亏损", "下滑", "减持", "质押", "问询", "处罚", "现金流", "毛利率"))
+        return [
+            "三、公司现状",
+            f"- 主线：{name} 的稀缺性来自锗资源 + 锗材料深加工 + 化合物半导体延伸。",
+            f"- 积极线索：{positive or '高端材料、光伏级/红外级产品、化合物半导体项目'}。",
+            f"- 风险线索：{risk or '盈利波动、产品价格周期、项目放量节奏、估值较高'}。",
+            "- 差异点：相比资源型有色公司，云南锗业更像“小金属资源 + 材料平台”标的，业绩弹性取决于高附加值产品占比，而不是单纯金属采选量。",
+        ]
+
+    def _research_peer_section(self, info: dict[str, object], peers: list[dict[str, object]]) -> list[str]:
+        lines = ["四、同行差异与估值"]
+        rows = [info] + peers if info else peers
+        lines.append("股票 | 定位 | 市值 | PE(TTM) | PB")
+        for item in rows:
+            name = str(item.get("symbol_name") or item.get("symbol") or "-")
+            symbol = str(item.get("symbol") or "-")
+            positioning = self._peer_positioning(symbol, name)
+            lines.append(
+                f"{name}({symbol}) | {positioning} | {self._fmt_money(item.get('market_cap'))} | "
+                f"{self._fmt_num(item.get('pe_ttm'))} | {self._fmt_num(item.get('pb'))}"
+            )
+        lines.append("- 估值解释：若云南锗业 PE 显著高于同行，市场通常在定价资源稀缺性、锗价弹性和化合物半导体成长性；但这也意味着业绩兑现要求更高。")
+        return lines
+
+    def _research_expectation_section(
+        self,
+        name: str,
+        info: dict[str, object],
+        items: list[dict[str, object]],
+        peers: list[dict[str, object]],
+    ) -> list[str]:
+        pe = self._to_float(info.get("pe_ttm")) if info else None
+        peer_pes = [self._to_float(item.get("pe_ttm")) for item in peers]
+        peer_pes = [value for value in peer_pes if value and value > 0]
+        peer_avg = sum(peer_pes) / len(peer_pes) if peer_pes else None
+        valuation_note = "估值缺少可比样本"
+        if pe and peer_avg:
+            valuation_note = "明显高于同行均值" if pe > peer_avg * 2 else "接近或略高于同行均值" if pe > peer_avg else "低于同行均值"
+        catalysts = self._top_keyword_hits(items, ("出口管制", "涨价", "红外", "卫星", "光伏", "磷化铟", "砷化镓", "半导体", "项目", "产能"))
+        return [
+            "五、预期与跟踪框架",
+            f"- 估值状态：{name} 当前 {valuation_note}；如果利润基数较低，PE 会被放大，需更多看 PB、市值/资源量、项目兑现。",
+            f"- 上行催化：{catalysts or '锗价上涨、高端产品放量、磷化铟/砷化镓项目兑现、红外/卫星/光伏需求'}。",
+            "- 关键观察：1）锗价和出口政策；2）红外级/光伏级/光纤级产品销量与毛利；3）化合物半导体产能利用率；4）同行估值是否同步抬升。",
+            "- 初步结论：适合作为“小金属战略资源 + 化合物半导体材料”弹性标的观察；若只按当前利润静态估值，安全垫不足，需用产业趋势和业绩兑现共同验证。",
+        ]
+
+    def _research_sources_section(self, items: list[dict[str, object]]) -> list[str]:
+        lines = ["六、信息源线索"]
+        for item in items[:8]:
+            title = self._clean_text(str(item.get("title") or "无标题"), 80)
+            source = item.get("source_site") or item.get("media_name") or item.get("_source") or "未知来源"
+            url = item.get("article_url") or ""
+            lines.append(f"- {source}：{title}")
+            if url:
+                lines.append(f"  {url}")
+        return lines
+
+    def _peer_positioning(self, symbol: str, name: str) -> str:
+        mapping = {
+            "002428.SZ": "锗全产业链/化合物半导体",
+            "600497.SH": "铅锌锗资源/中铝体系",
+            "000060.SZ": "铅锌铜综合资源",
+            "600206.SH": "稀有金属/电子材料",
+            "600362.SH": "铜冶炼/伴生资源",
+        }
+        return mapping.get(symbol, "有色/材料可比")
+
+    def _top_keyword_hits(self, items: list[dict[str, object]], words: tuple[str, ...]) -> str:
+        hits = []
+        for word in words:
+            count = sum(1 for item in items if word in self._news_body_text(item))
+            if count:
+                hits.append((word, count))
+        hits.sort(key=lambda row: (-row[1], row[0]))
+        return "、".join(f"{word}({count})" for word, count in hits[:6])
+
+    def _fmt_num(self, value: object) -> str:
+        number = self._to_float(value)
+        if number is None:
+            return "-"
+        return f"{number:.2f}"
+
+    def _fmt_pct_value(self, value: object) -> str:
+        number = self._to_float(value)
+        if number is None:
+            return "-"
+        return f"{number:.2f}%"
+
+    def _fmt_money(self, value: object) -> str:
+        number = self._to_float(value)
+        if number is None:
+            return "-"
+        if abs(number) >= 100000000:
+            return f"{number / 100000000:.2f}亿"
+        if abs(number) >= 10000:
+            return f"{number / 10000:.2f}万"
+        return f"{number:.2f}"
+
+    def _to_float(self, value: object) -> float | None:
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def _check_update(self) -> None:
         if not getattr(sys, "frozen", False):
