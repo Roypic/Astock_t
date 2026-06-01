@@ -297,6 +297,7 @@ class MonitorApp:
         self.market_worker: threading.Thread | None = None
         self.seen_intraday_news: set[str] = set()
         self.seen_market_alerts: set[str] = set()
+        self.news_monitor_started_at: datetime | None = None
         self.models_dir = ensure_default_models()
         self.mascot_x = 86
         self.mascot_start_x = 86
@@ -422,15 +423,20 @@ class MonitorApp:
 
         controls = ttk.Frame(outer)
         controls.pack(fill=tk.X, pady=(0, 12))
-        ttk.Button(controls, text="模型盘前", style="Ghost.TButton", command=self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls, text="信息面盘前", style="Ghost.TButton", command=self._show_info_premarket).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls, text="自选信息面", style="Ghost.TButton", command=self._open_custom_info_window).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls, text="自选走势", style="Ghost.TButton", command=self._open_watch_chart_window).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls, text="AI研报", style="Ghost.TButton", command=self._open_research_report_window).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls, text="更新程序", style="Ghost.TButton", command=self._check_update).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
+        controls_top = ttk.Frame(controls)
+        controls_top.pack(fill=tk.X, pady=(0, 8))
+        controls_bottom = ttk.Frame(controls)
+        controls_bottom.pack(fill=tk.X)
+        ttk.Button(controls_top, text="模型盘前", style="Ghost.TButton", command=self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls_top, text="信息面盘前", style="Ghost.TButton", command=self._show_info_premarket).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls_top, text="自选信息面", style="Ghost.TButton", command=self._open_custom_info_window).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls_top, text="小作文雷达", style="Ghost.TButton", command=self._open_rumor_radar_window).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls_top, text="自选走势", style="Ghost.TButton", command=self._open_watch_chart_window).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls_top, text="AI研报", style="Ghost.TButton", command=self._open_research_report_window).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls_top, text="更新程序", style="Ghost.TButton", command=self._check_update).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls_top, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
         tk.Checkbutton(
-            controls,
+            controls_bottom,
             text="盘中信息异动",
             variable=self.info_alert_var,
             bg=COLORS["bg"],
@@ -439,9 +445,9 @@ class MonitorApp:
             activeforeground=COLORS["text"],
             selectcolor=COLORS["card"],
             font=("Microsoft YaHei UI", 9),
-        ).pack(side=tk.LEFT, padx=(12, 4))
+        ).pack(side=tk.LEFT, padx=(0, 12))
         tk.Checkbutton(
-            controls,
+            controls_bottom,
             text="大盘/板块走弱",
             variable=self.market_alert_var,
             bg=COLORS["bg"],
@@ -450,9 +456,9 @@ class MonitorApp:
             activeforeground=COLORS["text"],
             selectcolor=COLORS["card"],
             font=("Microsoft YaHei UI", 9),
-        ).pack(side=tk.LEFT, padx=(4, 4))
-        ttk.Button(controls, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=8)
-        ttk.Button(controls, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
+        ).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Button(controls_bottom, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls_bottom, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
 
         columns = ("symbol", "code", "status", "action", "price", "target", "stop", "minute", "score", "message")
         table_card = ttk.Frame(outer, style="Card.TFrame", padding=12)
@@ -773,6 +779,112 @@ class MonitorApp:
                 "风险提醒：这是新闻语义搜索和关键词分类，不是投资建议；重要消息请打开原文和公告核对。",
             ]
         )
+        return "\n".join(lines)
+
+    def _open_rumor_radar_window(self) -> None:
+        window = tk.Toplevel(self.root)
+        window.title("小作文雷达")
+        window.geometry("900x680")
+        window.configure(bg=COLORS["bg"])
+
+        panel = ttk.Frame(window, style="Card.TFrame", padding=14)
+        panel.pack(fill=tk.X, padx=14, pady=(14, 8))
+        panel.columnconfigure(1, weight=1)
+
+        watch_var = tk.StringVar(value=self.news_watchlist_var.get())
+        hours_var = tk.StringVar(value="3")
+        status_var = tk.StringVar(value="手动查看当前时间之前的小作文/传闻雷达，不会触发推送。")
+
+        ttk.Label(panel, text="股票池", style="Muted.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        entry = ttk.Entry(panel, textvariable=watch_var)
+        entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 10))
+        ttk.Label(panel, text="小时", style="Muted.TLabel").grid(row=0, column=2, sticky=tk.E, padx=(0, 8))
+        ttk.Entry(panel, textvariable=hours_var, width=6).grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
+
+        result = tk.Text(window, wrap=tk.WORD, bg=COLORS["card"], fg=COLORS["text"], relief=tk.FLAT, padx=16, pady=14, font=("Microsoft YaHei UI", 10))
+        result.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
+        tk.Label(window, textvariable=status_var, bg=COLORS["bg"], fg=COLORS["muted"], anchor=tk.W, font=("Microsoft YaHei UI", 9)).pack(fill=tk.X, padx=16, pady=(0, 10))
+
+        def run_radar() -> None:
+            watch_text = watch_var.get().strip()
+            if not watch_text:
+                messagebox.showwarning("缺少股票", "请输入要查看的小作文监控股，例如 东山精密，福晶科技。")
+                return
+            try:
+                hours = max(1, min(8, int(hours_var.get().strip())))
+            except ValueError:
+                messagebox.showwarning("小时无效", "小时请输入 1-8 的数字。")
+                return
+            result.configure(state=tk.NORMAL)
+            result.delete("1.0", tk.END)
+            result.insert(tk.END, "正在扫描当前时间之前的传闻/小作文线索，请稍候...\n")
+            result.configure(state=tk.DISABLED)
+            status_var.set("正在扫描小作文雷达...")
+
+            def worker() -> None:
+                try:
+                    content = self._build_rumor_radar_report(watch_text, hours)
+                    self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": content}))
+                except Exception as exc:
+                    self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": f"小作文雷达扫描失败：{exc}"}))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        ttk.Button(panel, text="扫描", style="Primary.TButton", command=run_radar).grid(row=0, column=4, sticky=tk.E)
+        entry.bind("<Return>", lambda _event: run_radar())
+        entry.focus_set()
+
+    def _build_rumor_radar_report(self, watch_text: str, hours: int = 3) -> str:
+        now = datetime.now(BEIJING_TZ)
+        start = now - timedelta(hours=hours)
+        profiles = self._profiles_from_watch_text(watch_text)
+        client = MarketClient(ttl_seconds=30)
+        lines = [
+            f"小作文雷达手动扫描（北京时间 {now.strftime('%Y-%m-%d %H:%M')}）",
+            f"范围：当前时间之前最近 {hours} 小时；只展示，不推送，也不计入自动推送去重。",
+            "说明：它判断的是传播/杀伤力/验证状态，不裁定真假。",
+            "",
+        ]
+        if not profiles:
+            lines.append("没有识别到股票池。")
+            return "\n".join(lines)
+
+        for name, profile in profiles.items():
+            items = self._collect_rumor_candidates(name, profile, start, now)
+            scored = []
+            for item in items:
+                if self._news_age_minutes(item, now) > hours * 60:
+                    continue
+                score = self._rumor_item_score(name, profile, item)
+                if score["single_score"] < 8:
+                    continue
+                copied = dict(item)
+                copied.update(score)
+                scored.append(copied)
+            event = self._build_rumor_event(name, profile, scored, client, now)
+            lines.append(f"{name}：")
+            if not event:
+                lines.append("- 暂未发现明显小作文/传闻扩散线索。")
+                lines.append("")
+                continue
+            market = event.get("market") if isinstance(event.get("market"), dict) else {}
+            lines.append(
+                f"- 热度 {event.get('rumor_heat')}/100｜可信度 {event.get('credibility')}/100｜"
+                f"杀伤力 {event.get('impact_score')}/100｜官方反证/澄清 {event.get('contradiction')}/100"
+            )
+            lines.append(
+                f"- 类型：{event.get('event_type')}；来源数：{event.get('source_count')}；"
+                f"行情共振：{market.get('minute', '-')} 近15分钟 {market.get('price_drop_15m', 0)}%，量能比 {market.get('volume_ratio', 1)}"
+            )
+            for item in event.get("items", [])[:5]:
+                title = self._clean_text(str(item.get("title") or "无标题"), 88)
+                source = item.get("source_site") or item.get("media_name") or item.get("_source") or "未知来源"
+                publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
+                url = item.get("article_url") or ""
+                lines.append(f"- 单条强度 {item.get('single_score')}｜{publish}｜{source}：{title}")
+                if url:
+                    lines.append(f"  {url}")
+            lines.append("")
         return "\n".join(lines)
 
     def _open_watch_chart_window(self) -> None:
@@ -2191,6 +2303,7 @@ class MonitorApp:
         self.worker.start()
         if self.info_alert_var.get():
             self.seen_intraday_news.clear()
+            self.news_monitor_started_at = datetime.now(BEIJING_TZ)
             self.news_worker = threading.Thread(
                 target=self._run_intraday_news_worker,
                 args=(token,),
@@ -2217,6 +2330,7 @@ class MonitorApp:
 
     def _stop(self) -> None:
         self.stop_event.set()
+        self.news_monitor_started_at = None
         self.status_var.set("停止中")
         self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["coral_dark"])
         self._log("正在停止监控")
@@ -2275,6 +2389,9 @@ class MonitorApp:
                 key = str(item.get("article_url") or item.get("news_id") or item.get("title") or "")
                 if not key or key in self.seen_intraday_news:
                     continue
+                published = self._parse_news_time(str(item.get("publish_time") or item.get("fetch_time") or ""))
+                if self.news_monitor_started_at and (not published or published < self.news_monitor_started_at):
+                    continue
                 if self._news_age_minutes(item, now) > 180:
                     continue
                 score = self._rumor_item_score(name, profile, item)
@@ -2297,6 +2414,9 @@ class MonitorApp:
 
     def _watched_news_profiles(self) -> dict[str, dict[str, tuple[str, ...]]]:
         text = self.news_watchlist_var.get().strip() if hasattr(self, "news_watchlist_var") else ""
+        return self._profiles_from_watch_text(text)
+
+    def _profiles_from_watch_text(self, text: str) -> dict[str, dict[str, tuple[str, ...]]]:
         names = [part.strip() for part in re.split(r"[,，;；\s]+", text) if part.strip()]
         if not names:
             names = list(NEWS_PROFILES)
