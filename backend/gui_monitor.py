@@ -269,6 +269,9 @@ MARKET_WEAK_INDEX_THRESHOLD = -0.008
 MARKET_WEAK_INDEX_MOMENTUM = -0.0025
 MARKET_WEAK_BASKET_THRESHOLD = -0.012
 MARKET_WEAK_BASKET_MOMENTUM = -0.004
+MARKET_ALERT_RETURN_STEP = 0.004
+MARKET_ALERT_MOMENTUM_STEP = 0.003
+MARKET_ALERT_TURN_MOMENTUM = 0.0015
 COLORS = {
     "bg": "#F6F3EC",
     "card": "#FFFDF7",
@@ -326,6 +329,7 @@ class MonitorApp:
         self.seen_intraday_news: set[str] = set()
         self.seen_rumor_events: dict[str, dict[str, object]] = {}
         self.seen_market_alerts: set[str] = set()
+        self.market_alert_states: dict[str, dict[str, object]] = {}
         self.news_monitor_started_at: datetime | None = None
         self.models_dir = ensure_default_models()
         self.mascot_x = 86
@@ -2353,6 +2357,7 @@ class MonitorApp:
             self.news_worker.start()
         if self.market_alert_var.get():
             self.seen_market_alerts.clear()
+            self.market_alert_states.clear()
             self.market_worker = threading.Thread(
                 target=self._run_market_weak_worker,
                 args=(model_path, token),
@@ -3065,13 +3070,19 @@ class MonitorApp:
                 continue
             day_return, momentum, minute = stats
             level = self._weak_level(day_return, momentum, MARKET_WEAK_INDEX_THRESHOLD, MARKET_WEAK_INDEX_MOMENTUM)
-            if not level:
+            should_alert, reason, alert_level = self._market_alert_decision(
+                now,
+                "INDEX",
+                name,
+                level,
+                day_return,
+                momentum,
+                MARKET_WEAK_INDEX_THRESHOLD,
+                MARKET_WEAK_INDEX_MOMENTUM,
+            )
+            if not should_alert:
                 continue
-            key = self._market_alert_key(now, "INDEX", name, level)
-            if key in self.seen_market_alerts:
-                continue
-            self.seen_market_alerts.add(key)
-            index_rows.append((name, day_return, momentum, minute, level))
+            index_rows.append((name, day_return, momentum, minute, alert_level, reason))
         if index_rows:
             alerts.append(self._format_market_index_alert(index_rows, now))
 
@@ -3086,13 +3097,19 @@ class MonitorApp:
                 MARKET_WEAK_BASKET_THRESHOLD,
                 MARKET_WEAK_BASKET_MOMENTUM,
             )
-            if not level:
+            should_alert, reason, alert_level = self._market_alert_decision(
+                now,
+                "BASKET",
+                model.name,
+                level,
+                basket_return,
+                momentum,
+                MARKET_WEAK_BASKET_THRESHOLD,
+                MARKET_WEAK_BASKET_MOMENTUM,
+            )
+            if not should_alert:
                 continue
-            key = self._market_alert_key(now, "BASKET", model.name, level)
-            if key in self.seen_market_alerts:
-                continue
-            self.seen_market_alerts.add(key)
-            alerts.append(self._format_basket_weak_alert(model, basket_return, momentum, minute, valid_count, level, now))
+            alerts.append(self._format_basket_weak_alert(model, basket_return, momentum, minute, valid_count, alert_level, reason, now))
         return alerts
 
     def _intraday_weak_stats(self, prices: list[object]) -> tuple[float, float, str] | None:
@@ -3134,6 +3151,67 @@ class MonitorApp:
             return "警戒"
         return ""
 
+    def _market_alert_decision(
+        self,
+        now: datetime,
+        category: str,
+        name: str,
+        level: str,
+        day_return: float,
+        momentum: float,
+        return_threshold: float,
+        momentum_threshold: float,
+    ) -> tuple[bool, str, str]:
+        key = f"{now.strftime('%Y-%m-%d')}:{category}:{name}"
+        state = self.market_alert_states.get(key, {})
+        prev_level = str(state.get("level") or "")
+        active_level = str(state.get("active_level") or prev_level)
+        prev_return = state.get("day_return")
+        prev_momentum = state.get("momentum")
+        last_alert_return = state.get("last_alert_return")
+        last_alert_momentum = state.get("last_alert_momentum")
+        last_alert_level = str(state.get("last_alert_level") or "")
+
+        reason = ""
+        alert_level = level
+        if level:
+            if not last_alert_level:
+                reason = f"首次进入{level}区间"
+            elif self._weak_level_rank(level) > self._weak_level_rank(last_alert_level):
+                reason = f"风险升级：{last_alert_level} -> {level}"
+            elif isinstance(last_alert_return, (int, float)) and abs(day_return - float(last_alert_return)) >= MARKET_ALERT_RETURN_STEP:
+                direction = "扩大" if day_return < float(last_alert_return) else "收敛"
+                reason = f"日内幅度明显{direction}"
+            elif isinstance(last_alert_momentum, (int, float)) and abs(momentum - float(last_alert_momentum)) >= MARKET_ALERT_MOMENTUM_STEP:
+                direction = "转弱" if momentum < float(last_alert_momentum) else "修复"
+                reason = f"近5分钟动量明显{direction}"
+        elif active_level and isinstance(prev_momentum, (int, float)) and momentum >= MARKET_ALERT_TURN_MOMENTUM:
+            alert_level = "修复"
+            reason = f"拐点修复：脱离{active_level}，近5分钟转正"
+        elif active_level and isinstance(prev_return, (int, float)) and day_return - float(prev_return) >= MARKET_ALERT_RETURN_STEP:
+            alert_level = "修复"
+            reason = f"拐点修复：日内跌幅明显收敛"
+
+        state.update({"level": level, "day_return": day_return, "momentum": momentum, "minute": now.strftime("%H:%M")})
+        if level:
+            state["active_level"] = level
+        elif reason and alert_level == "修复":
+            state["active_level"] = ""
+        if reason:
+            state.update(
+                {
+                    "last_alert_level": alert_level,
+                    "last_alert_return": day_return,
+                    "last_alert_momentum": momentum,
+                    "last_alert_at": now.isoformat(),
+                }
+            )
+        self.market_alert_states[key] = state
+        return bool(reason), reason, alert_level
+
+    def _weak_level_rank(self, level: str) -> int:
+        return {"修复": 0, "警戒": 1, "严重": 2}.get(level, 0)
+
     def _market_alert_key(self, now: datetime, category: str, name: str, level: str) -> str:
         bucket_minute = (now.minute // 30) * 30
         return f"{now.strftime('%Y-%m-%d')}:{now.hour:02d}:{bucket_minute:02d}:{category}:{name}:{level}"
@@ -3141,22 +3219,23 @@ class MonitorApp:
     def _format_pct(self, value: float) -> str:
         return f"{value * 100:+.2f}%"
 
-    def _format_market_index_alert(self, rows: list[tuple[str, float, float, str, str]], now: datetime) -> dict[str, str]:
-        worst_level = "严重" if any(row[4] == "严重" for row in rows) else "警戒"
+    def _format_market_index_alert(self, rows: list[tuple[str, float, float, str, str, str]], now: datetime) -> dict[str, str]:
+        worst_level = "严重" if any(row[4] == "严重" for row in rows) else ("警戒" if any(row[4] == "警戒" for row in rows) else "修复")
+        title_word = "走弱" if worst_level != "修复" else "修复"
         lines = [
-            f"大盘走弱提醒（{worst_level}）",
-            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到指数走弱。",
+            f"大盘{title_word}提醒（{worst_level}）",
+            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到指数状态变化。",
             "这不是交易指令，请结合持仓、做T计划和盘中量价确认风险。",
             "",
         ]
-        for name, day_return, momentum, minute, level in rows:
+        for name, day_return, momentum, minute, level, reason in rows:
             lines.append(
-                f"- {name}｜{level}｜{minute}｜日内 {self._format_pct(day_return)}｜近约5分钟 {self._format_pct(momentum)}"
+                f"- {name}｜{level}｜{reason}｜{minute}｜日内 {self._format_pct(day_return)}｜近约5分钟 {self._format_pct(momentum)}"
             )
         return {
-            "title": f"大盘走弱提醒：{worst_level}",
+            "title": f"大盘{title_word}提醒：{worst_level}",
             "content": "\n".join(lines),
-            "summary": f"{len(rows)} 个指数走弱",
+            "summary": f"{len(rows)} 个指数状态变化",
         }
 
     def _format_basket_weak_alert(
@@ -3167,21 +3246,24 @@ class MonitorApp:
         minute: str,
         valid_count: int,
         level: str,
+        reason: str,
         now: datetime,
     ) -> dict[str, str]:
         peer_names = "、".join(peer.name for peer in model.basket[:5])
+        title_word = "修复" if level == "修复" else "走弱"
         lines = [
-            f"板块/相似股走弱：{model.name}（{level}）",
-            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到关联篮子走弱。",
+            f"板块/相似股{title_word}：{model.name}（{level}）",
+            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到关联篮子状态变化。",
+            f"触发原因：{reason}",
             f"样本：{valid_count} 只相似股；{peer_names}",
             "",
             f"- {minute}｜篮子日内均值 {self._format_pct(basket_return)}｜近约5分钟 {self._format_pct(momentum)}",
             "这不是交易指令；若你正在做T或准备挂单，建议先确认大盘、板块和个股承接。",
         ]
         return {
-            "title": f"板块走弱提醒：{model.name}",
+            "title": f"板块{title_word}提醒：{model.name}",
             "content": "\n".join(lines),
-            "summary": f"{model.name} 相似股篮子{level}走弱",
+            "summary": f"{model.name} 相似股篮子{level}{title_word}",
         }
 
     def _drain_queue(self) -> None:
