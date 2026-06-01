@@ -31,7 +31,7 @@ except Exception:
     BUILD_SHA = "dev"
 
 DEFAULT_INTERVAL_SECONDS = 30
-INTRADAY_NEWS_INTERVAL_SECONDS = 300
+INTRADAY_NEWS_INTERVAL_SECONDS = 60
 MARKET_WEAK_INTERVAL_SECONDS = 300
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
 NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
@@ -180,6 +180,63 @@ MILD_NEGATIVE_TERMS = {
     "降价": 1,
     "风险": 1,
 }
+RUMOR_WEAK_SOURCE_TERMS = {
+    "小作文": 5,
+    "传闻": 4,
+    "据传": 4,
+    "据说": 3,
+    "听说": 3,
+    "网传": 4,
+    "市场传": 4,
+    "内部消息": 5,
+    "截图": 3,
+    "朋友圈": 3,
+    "群里": 3,
+    "电话会": 2,
+    "纪要": 2,
+    "券商群": 4,
+    "未证实": 5,
+    "辟谣": 3,
+}
+RUMOR_EVENT_TERMS = {
+    "失联": 6,
+    "不敢回国": 7,
+    "被查": 7,
+    "带走": 7,
+    "配合调查": 6,
+    "行贿": 6,
+    "受贿": 6,
+    "财务造假": 7,
+    "订单取消": 5,
+    "砍单": 5,
+    "暂停供货": 5,
+    "被制裁": 6,
+    "审批失败": 5,
+    "并购失败": 5,
+    "并购黄了": 6,
+    "无法并表": 5,
+    "客户砍单": 5,
+    "董事长出事": 7,
+    "实控人出事": 7,
+    "监管问询": 4,
+    "商誉减值": 4,
+}
+OFFICIAL_SOURCE_TERMS = (
+    "公告",
+    "巨潮",
+    "上交所",
+    "深交所",
+    "交易所",
+    "互动易",
+    "证券时报",
+    "中国证券报",
+    "上海证券报",
+    "财联社",
+    "公司回应",
+    "澄清",
+)
+RUMOR_ALERT_HEAT_THRESHOLD = 55
+RUMOR_ALERT_IMPACT_THRESHOLD = 55
 MARKET_WEAK_INDEX_THRESHOLD = -0.008
 MARKET_WEAK_INDEX_MOMENTUM = -0.0025
 MARKET_WEAK_BASKET_THRESHOLD = -0.012
@@ -251,6 +308,7 @@ class MonitorApp:
         self.token_var = tk.StringVar()
         self.model_path_var = tk.StringVar(value=str(self.models_dir))
         self.interval_var = tk.StringVar(value=str(DEFAULT_INTERVAL_SECONDS))
+        self.news_watchlist_var = tk.StringVar(value="剑桥科技，东山精密，福晶科技，利通电子")
         self.info_alert_var = tk.BooleanVar(value=True)
         self.market_alert_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="未启动")
@@ -324,6 +382,9 @@ class MonitorApp:
         ttk.Label(form, text="间隔秒", style="Muted.TLabel").grid(row=2, column=2, sticky=tk.E, padx=4, pady=7)
         ttk.Entry(form, textvariable=self.interval_var, width=8).grid(row=2, column=3, sticky=tk.W, padx=(8, 0), pady=7)
 
+        ttk.Label(form, text="小作文监控股", style="Muted.TLabel").grid(row=3, column=0, sticky=tk.W, padx=(0, 12), pady=7)
+        ttk.Entry(form, textvariable=self.news_watchlist_var).grid(row=3, column=1, columnspan=3, sticky=tk.EW, padx=(0, 0), pady=7)
+
         self.risk_label = tk.Label(
             form,
             textvariable=self.risk_var,
@@ -336,10 +397,10 @@ class MonitorApp:
             wraplength=850,
             font=("Microsoft YaHei UI", 9),
         )
-        self.risk_label.grid(row=3, column=0, columnspan=4, sticky=tk.EW, pady=(8, 0))
+        self.risk_label.grid(row=4, column=0, columnspan=4, sticky=tk.EW, pady=(8, 0))
 
         help_frame = ttk.Frame(form, style="Soft.TFrame", padding=12)
-        help_frame.grid(row=4, column=0, columnspan=4, sticky=tk.EW, pady=(10, 0))
+        help_frame.grid(row=5, column=0, columnspan=4, sticky=tk.EW, pady=(10, 0))
         help_frame.columnconfigure(0, weight=1)
         help_text = (
             "PushPlus 使用：1. 打开 PushPlus 官网并用微信扫码登录；"
@@ -2148,7 +2209,7 @@ class MonitorApp:
         self.status_badge.configure(bg=COLORS["mint"], fg=COLORS["sage_dark"])
         notes = []
         if self.info_alert_var.get():
-            notes.append("盘中信息异动已开启")
+            notes.append("盘中小作文雷达已开启：" + "、".join(self._watched_news_profiles().keys()))
         if self.market_alert_var.get():
             notes.append("大盘/板块走弱提醒已开启")
         info_note = "，" + "，".join(notes) if notes else ""
@@ -2181,7 +2242,7 @@ class MonitorApp:
 
     def _run_intraday_news_worker(self, token: str) -> None:
         notifier = PushPlusNotifier(token)
-        self.queue.put(("log", f"盘中信息异动已启动：每 {INTRADAY_NEWS_INTERVAL_SECONDS // 60} 分钟检查一次预设股负面新闻"))
+        self.queue.put(("log", f"盘中小作文雷达已启动：每 {INTRADAY_NEWS_INTERVAL_SECONDS} 秒检查一次自选股"))
         while not self.stop_event.is_set():
             if not self._is_live_trading_now():
                 self.stop_event.wait(60)
@@ -2204,28 +2265,209 @@ class MonitorApp:
 
     def _scan_intraday_negative_news(self) -> list[dict[str, str]]:
         now = datetime.now(BEIJING_TZ)
-        start = now - timedelta(hours=2)
+        start = now - timedelta(hours=3)
         alerts = []
-        for name, profile in NEWS_PROFILES.items():
-            theme = " ".join(profile.get("theme", ())[:3])
-            query = f"{name} {theme}".strip()
-            items = self._search_precise_news(query, start, now, limit=8, candidate_limit=16)
-            severe_items = []
+        client = MarketClient(ttl_seconds=30)
+        for name, profile in self._watched_news_profiles().items():
+            items = self._collect_rumor_candidates(name, profile, start, now)
+            scored = []
             for item in items:
                 key = str(item.get("article_url") or item.get("news_id") or item.get("title") or "")
                 if not key or key in self.seen_intraday_news:
                     continue
-                severity = self._negative_news_severity(item)
-                if severity < 5:
-                    continue
                 if self._news_age_minutes(item, now) > 180:
                     continue
-                self.seen_intraday_news.add(key)
-                item["_negative_severity"] = severity
-                severe_items.append(item)
-            if severe_items:
-                alerts.append(self._format_intraday_news_alert(name, severe_items, now))
+                score = self._rumor_item_score(name, profile, item)
+                if score["single_score"] < 8:
+                    continue
+                copied = dict(item)
+                copied.update(score)
+                scored.append(copied)
+            event = self._build_rumor_event(name, profile, scored, client, now)
+            if not event:
+                continue
+            if event["rumor_heat"] < RUMOR_ALERT_HEAT_THRESHOLD and event["impact_score"] < RUMOR_ALERT_IMPACT_THRESHOLD:
+                continue
+            for item in event["items"]:
+                key = str(item.get("article_url") or item.get("news_id") or item.get("title") or "")
+                if key:
+                    self.seen_intraday_news.add(key)
+            alerts.append(self._format_intraday_news_alert(name, event, now))
         return alerts
+
+    def _watched_news_profiles(self) -> dict[str, dict[str, tuple[str, ...]]]:
+        text = self.news_watchlist_var.get().strip() if hasattr(self, "news_watchlist_var") else ""
+        names = [part.strip() for part in re.split(r"[,，;；\s]+", text) if part.strip()]
+        if not names:
+            names = list(NEWS_PROFILES)
+        profiles: dict[str, dict[str, tuple[str, ...]]] = {}
+        for name in names[:12]:
+            profile = self._news_profile_for_query(name)
+            if profile:
+                display_name = next((key for key, value in NEWS_PROFILES.items() if value is profile), name)
+                profiles[display_name] = profile
+                continue
+            code = self._resolve_stock_code(name)
+            themes = self._research_themes_for(code, name, name) if code else tuple(self._query_terms(name))
+            aliases = tuple(dict.fromkeys((name, code.replace(".SH", "").replace(".SZ", "") if code else "")))
+            profiles[name] = {"aliases": aliases, "required": aliases, "theme": tuple(themes[:7])}
+        return profiles
+
+    def _collect_rumor_candidates(
+        self,
+        name: str,
+        profile: dict[str, tuple[str, ...]],
+        start: datetime,
+        now: datetime,
+    ) -> list[dict[str, object]]:
+        aliases = [word for word in profile.get("aliases", ()) if word]
+        themes = [word for word in profile.get("theme", ()) if word]
+        primary = aliases[0] if aliases else name
+        queries = [
+            primary,
+            f"{primary} 小作文 传闻",
+            f"{primary} 股吧 雪球 传闻",
+            f"{primary} 董事长 实控人 被查 砍单",
+            f"{primary} {' '.join(themes[:3])}".strip(),
+            f"site:guba.eastmoney.com {primary}",
+            f"site:xueqiu.com {primary}",
+        ]
+        seen = set()
+        results = []
+        for query in queries:
+            if not query.strip():
+                continue
+            try:
+                ft_items = self._search_news(query, start, now, limit=12)
+            except Exception as exc:
+                self.queue.put(("log", f"小作文 FTShare 搜索失败：{query}｜{exc}"))
+                ft_items = []
+            try:
+                rss_items = self._search_google_news_rss(query, start, now, limit=12)
+            except Exception as exc:
+                self.queue.put(("log", f"小作文 Google 搜索失败：{query}｜{exc}"))
+                rss_items = []
+            for item in [*ft_items, *rss_items]:
+                key = item.get("article_url") or item.get("news_id") or item.get("title")
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                copied = dict(item)
+                copied["_query"] = query
+                results.append(copied)
+        ranked = self._rerank_news(primary, results, limit=36, broad=True)
+        return ranked
+
+    def _rumor_item_score(self, name: str, profile: dict[str, tuple[str, ...]], item: dict[str, object]) -> dict[str, int | str]:
+        text = self._news_body_text(item)
+        title = str(item.get("title") or "")
+        weak_score = sum(weight for word, weight in RUMOR_WEAK_SOURCE_TERMS.items() if word in text)
+        event_score = sum(weight for word, weight in RUMOR_EVENT_TERMS.items() if word in text)
+        negative_score = self._negative_news_severity(item)
+        source = str(item.get("source_site") or item.get("media_name") or item.get("_source") or "")
+        source_is_official = any(word in source for word in OFFICIAL_SOURCE_TERMS)
+        title_has_confirmation = any(word in title for word in ("公司回应", "澄清", "公告称", "交易所", "监管函", "问询函"))
+        title_denies_source = any(word in title for word in ("暂无公告", "无公告", "未公告", "未证实"))
+        official_score = 18 if source_is_official or (title_has_confirmation and not title_denies_source) else 0
+        aliases = tuple(profile.get("aliases", ()))
+        theme = tuple(profile.get("theme", ()))
+        alias_score = min(8, sum(3 for word in aliases if word and word in text))
+        theme_score = min(5, sum(1 for word in theme if word and word in text))
+        single_score = alias_score + theme_score + weak_score + event_score + negative_score + official_score
+        event_type = self._rumor_event_type(text)
+        return {
+            "single_score": single_score,
+            "weak_score": weak_score,
+            "event_score": event_score,
+            "negative_score": negative_score,
+            "official_score": official_score,
+            "event_type": event_type,
+        }
+
+    def _rumor_event_type(self, text: str) -> str:
+        groups = (
+            ("实控人/监管", ("董事长", "实控人", "被查", "调查", "行贿", "带走", "失联")),
+            ("订单/客户", ("订单", "砍单", "客户", "暂停供货", "解约")),
+            ("并购/资产", ("并购", "收购", "审批", "并表", "商誉")),
+            ("财务/业绩", ("财务", "造假", "亏损", "减值", "下修")),
+            ("政策/制裁", ("制裁", "出口管制", "监管", "政策")),
+        )
+        for label, words in groups:
+            if any(word in text for word in words):
+                return label
+        return "其他传闻"
+
+    def _build_rumor_event(
+        self,
+        name: str,
+        profile: dict[str, tuple[str, ...]],
+        items: list[dict[str, object]],
+        client: MarketClient,
+        now: datetime,
+    ) -> dict[str, object] | None:
+        if not items:
+            return None
+        items.sort(key=lambda item: int(item.get("single_score") or 0), reverse=True)
+        top_items = items[:8]
+        unique_sources = {
+            str(item.get("source_site") or item.get("media_name") or item.get("_source") or "未知")
+            for item in top_items
+        }
+        weak_total = sum(int(item.get("weak_score") or 0) for item in top_items)
+        event_total = sum(int(item.get("event_score") or 0) for item in top_items)
+        official_total = sum(int(item.get("official_score") or 0) for item in top_items)
+        negative_total = sum(int(item.get("negative_score") or 0) for item in top_items)
+        freshness_bonus = max(0, 20 - int(min((self._news_age_minutes(top_items[0], now), 60)) / 3))
+        rumor_heat = min(100, len(top_items) * 12 + len(unique_sources) * 8 + weak_total + freshness_bonus)
+        credibility = min(100, official_total + len(unique_sources) * 7 + max(0, 18 - weak_total // 2))
+        impact = min(100, event_total * 3 + negative_total * 5 + weak_total * 2 + rumor_heat // 3)
+        contradiction = 0
+        if official_total and weak_total:
+            contradiction = min(100, official_total + weak_total * 2)
+        market = self._rumor_market_reaction(name, profile, client)
+        if market["price_drop_15m"] <= -2.5:
+            impact = min(100, impact + 18)
+            rumor_heat = min(100, rumor_heat + 8)
+        if market["volume_ratio"] >= 1.8:
+            impact = min(100, impact + 10)
+        event_types: dict[str, int] = {}
+        for item in top_items:
+            event_type = str(item.get("event_type") or "其他传闻")
+            event_types[event_type] = event_types.get(event_type, 0) + 1
+        dominant_type = max(event_types, key=event_types.get)
+        return {
+            "items": top_items,
+            "rumor_heat": rumor_heat,
+            "credibility": credibility,
+            "impact_score": impact,
+            "contradiction": contradiction,
+            "market": market,
+            "event_type": dominant_type,
+            "source_count": len(unique_sources),
+        }
+
+    def _rumor_market_reaction(self, name: str, profile: dict[str, tuple[str, ...]], client: MarketClient) -> dict[str, float | str]:
+        code = self._resolve_stock_code(name)
+        if not code:
+            aliases = profile.get("aliases", ())
+            code = next((alias for alias in aliases if re.fullmatch(r"\d{6}\.(SH|SZ)", alias)), "")
+        ft_code = self._to_ft_stock_code(code) if code else ""
+        if not ft_code:
+            return {"price_drop_15m": 0.0, "volume_ratio": 1.0, "minute": "-"}
+        try:
+            prices = client.get_stock_prices(ft_code)
+        except Exception:
+            return {"price_drop_15m": 0.0, "volume_ratio": 1.0, "minute": "-"}
+        if len(prices) < 3:
+            return {"price_drop_15m": 0.0, "volume_ratio": 1.0, "minute": prices[-1].minute if prices else "-"}
+        latest = prices[-1]
+        base = prices[-min(16, len(prices))]
+        drop = (latest.price / base.price - 1) * 100 if base.price else 0.0
+        recent_vol = sum(max(0.0, item.volume) for item in prices[-15:])
+        prev_slice = prices[-30:-15]
+        prev_vol = sum(max(0.0, item.volume) for item in prev_slice) if prev_slice else 0.0
+        volume_ratio = recent_vol / prev_vol if prev_vol > 0 else 1.0
+        return {"price_drop_15m": round(drop, 2), "volume_ratio": round(volume_ratio, 2), "minute": latest.minute}
 
     def _negative_news_severity(self, item: dict[str, object]) -> int:
         text = self._news_text(item)
@@ -2268,29 +2510,47 @@ class MonitorApp:
                 continue
         return None
 
-    def _format_intraday_news_alert(self, name: str, items: list[dict[str, object]], now: datetime) -> dict[str, str]:
+    def _format_intraday_news_alert(self, name: str, event: dict[str, object], now: datetime) -> dict[str, str]:
+        items = event.get("items") if isinstance(event.get("items"), list) else []
+        market = event.get("market") if isinstance(event.get("market"), dict) else {}
+        rumor_heat = int(event.get("rumor_heat") or 0)
+        credibility = int(event.get("credibility") or 0)
+        impact = int(event.get("impact_score") or 0)
+        contradiction = int(event.get("contradiction") or 0)
+        if rumor_heat >= 75 and credibility < 45 and impact >= 65:
+            conclusion = "高传播、低验证、强杀伤小作文。优先控风险/暂停加仓，等待公告或公司回应。"
+        elif credibility >= 65:
+            conclusion = "存在较强正式来源，按硬信息处理，需优先核对公告/媒体原文。"
+        elif impact >= 65:
+            conclusion = "传闻杀伤力较强，真假未明也可能被短线资金交易。"
+        else:
+            conclusion = "暂属观察级异动，继续跟踪是否扩散和是否触发行情共振。"
         lines = [
-            f"盘中信息异动：{name}",
-            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到极差情绪新闻。",
+            f"盘中小作文雷达：{name}",
+            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到疑似传闻/负面信息扩散。",
+            f"事件类型：{event.get('event_type', '其他传闻')}；来源数：{event.get('source_count', '-')}",
+            f"传闻热度：{rumor_heat}/100｜可信度：{credibility}/100｜杀伤力：{impact}/100｜官方反证/澄清强度：{contradiction}/100",
+            f"行情共振：{market.get('minute', '-')} 近15分钟 {market.get('price_drop_15m', 0)}%，量能比 {market.get('volume_ratio', 1)}",
+            f"结论：{conclusion}",
             "这不是交易指令，请优先核对原文/公告，并结合盘中量价处理风险。",
             "",
         ]
-        for item in sorted(items, key=lambda row: int(row.get("_negative_severity") or 0), reverse=True)[:3]:
-            severity = int(item.get("_negative_severity") or 0)
+        for item in sorted(items, key=lambda row: int(row.get("single_score") or row.get("_negative_severity") or 0), reverse=True)[:3]:
+            severity = int(item.get("single_score") or item.get("_negative_severity") or 0)
             relevance = item.get("_relevance_score")
             rel = f"，相关度 {float(relevance):.1f}" if isinstance(relevance, (int, float)) else ""
             title = self._clean_text(str(item.get("title") or "无标题"), 88)
             source = item.get("source_site") or item.get("media_name") or "未知来源"
             publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
             url = item.get("article_url") or ""
-            lines.append(f"- 严重度 {severity}{rel}｜{publish}｜{source}")
+            lines.append(f"- 单条强度 {severity}{rel}｜{publish}｜{source}")
             lines.append(f"  {title}")
             if url:
                 lines.append(f"  {url}")
         return {
-            "title": f"盘中信息异动：{name}",
+            "title": f"小作文雷达：{name}",
             "content": "\n".join(lines),
-            "summary": f"{name} {len(items)} 条极差情绪新闻",
+            "summary": f"{name} 热度{rumor_heat} 杀伤{impact} 可信{credibility}",
         }
 
     def _run_market_weak_worker(self, model_path: Path, token: str) -> None:
