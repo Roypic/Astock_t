@@ -220,7 +220,33 @@ RUMOR_EVENT_TERMS = {
     "实控人出事": 7,
     "监管问询": 4,
     "商誉减值": 4,
+    "黑料": 6,
+    "举报": 5,
+    "抵制": 5,
+    "不实": 4,
+    "造谣": 4,
+    "辟谣": 4,
+    "澄清": 3,
+    "利空": 4,
+    "大利空": 6,
+    "恐慌": 4,
+    "踩踏": 5,
+    "跳水": 4,
+    "大跌": 3,
 }
+WILD_RUMOR_SOURCE_TERMS = (
+    "股吧",
+    "雪球",
+    "微博",
+    "weibo",
+    "x.com",
+    "twitter",
+    "X平台",
+    "Telegram",
+    "电报群",
+    "朋友圈",
+    "微信群",
+)
 OFFICIAL_SOURCE_TERMS = (
     "公告",
     "巨潮",
@@ -874,6 +900,7 @@ class MonitorApp:
             )
             lines.append(
                 f"- 类型：{event.get('event_type')}；来源数：{event.get('source_count')}；"
+                f"野源数：{event.get('wild_source_count', 0)}；"
                 f"行情共振：{market.get('minute', '-')} 近15分钟 {market.get('price_drop_15m', 0)}%，量能比 {market.get('volume_ratio', 1)}"
             )
             lines.append(f"- 核心主张：{event.get('claim', '未提取到明确主张')}")
@@ -883,7 +910,8 @@ class MonitorApp:
                 source = item.get("source_site") or item.get("media_name") or item.get("_source") or "未知来源"
                 publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
                 url = item.get("article_url") or ""
-                lines.append(f"- 单条强度 {item.get('single_score')}｜{publish}｜{source}：{title}")
+                source_type = "野源" if int(item.get("wild_score") or 0) else "正式/聚合"
+                lines.append(f"- 单条强度 {item.get('single_score')}｜{source_type}｜{publish}｜{source}：{title}")
                 if url:
                     lines.append(f"  {url}")
             lines.append("")
@@ -2450,9 +2478,16 @@ class MonitorApp:
             f"{primary} 小作文 传闻",
             f"{primary} 股吧 雪球 传闻",
             f"{primary} 董事长 实控人 被查 砍单",
+            f"{primary} 小作文 利空 跳水 辟谣",
+            f"{primary} 黑料 举报 不实 澄清",
+            f"{primary} 微博 小作文",
+            f"{primary} X Twitter 传闻",
             f"{primary} {' '.join(themes[:3])}".strip(),
             f"site:guba.eastmoney.com {primary}",
             f"site:xueqiu.com {primary}",
+            f"site:weibo.com {primary}",
+            f"site:x.com {primary}",
+            f"site:twitter.com {primary}",
         ]
         seen = set()
         results = []
@@ -2473,11 +2508,17 @@ class MonitorApp:
                 key = item.get("article_url") or item.get("news_id") or item.get("title")
                 if not key or key in seen:
                     continue
+                if not self._rumor_entity_match(name, profile, item):
+                    continue
                 seen.add(key)
                 copied = dict(item)
                 copied["_query"] = query
                 results.append(copied)
-        ranked = self._rerank_news(primary, results, limit=36, broad=True)
+        ranked = [
+            item
+            for item in self._rerank_news(primary, results, limit=48, broad=True)
+            if self._rumor_entity_match(name, profile, item)
+        ]
         return ranked
 
     def _rumor_item_score(self, name: str, profile: dict[str, tuple[str, ...]], item: dict[str, object]) -> dict[str, int | str]:
@@ -2495,7 +2536,8 @@ class MonitorApp:
         theme = tuple(profile.get("theme", ()))
         alias_score = min(8, sum(3 for word in aliases if word and word in text))
         theme_score = min(5, sum(1 for word in theme if word and word in text))
-        single_score = alias_score + theme_score + weak_score + event_score + negative_score + official_score
+        wild_score = 10 if self._is_wild_rumor_source(item) else 0
+        single_score = alias_score + theme_score + weak_score + event_score + negative_score + official_score + wild_score
         event_type = self._rumor_event_type(text)
         return {
             "single_score": single_score,
@@ -2503,8 +2545,34 @@ class MonitorApp:
             "event_score": event_score,
             "negative_score": negative_score,
             "official_score": official_score,
+            "wild_score": wild_score,
             "event_type": event_type,
         }
+
+    def _rumor_entity_match(self, name: str, profile: dict[str, tuple[str, ...]], item: dict[str, object]) -> bool:
+        text = self._news_body_text(item)
+        aliases = [word for word in profile.get("aliases", ()) if word]
+        required = [word for word in profile.get("required", ()) if word]
+        code = self._resolve_stock_code(name)
+        if code:
+            raw_code = code.replace(".SH", "").replace(".SZ", "")
+            aliases.extend([code, raw_code])
+            required.extend([raw_code])
+        aliases = list(dict.fromkeys(aliases))
+        required = list(dict.fromkeys(required))
+        if any(alias and alias in text for alias in aliases):
+            return True
+        if any(re.search(rf"[\$＄][^\\s，,。；;]*{re.escape(alias)}", text) for alias in required if alias):
+            return True
+        return False
+
+    def _is_wild_rumor_source(self, item: dict[str, object]) -> bool:
+        text = " ".join(
+            str(item.get(key) or "")
+            for key in ("source_site", "media_name", "_source", "_query", "article_url", "title")
+        )
+        lowered = text.lower()
+        return any(term.lower() in lowered for term in WILD_RUMOR_SOURCE_TERMS)
 
     def _rumor_event_type(self, text: str) -> str:
         groups = (
@@ -2513,6 +2581,7 @@ class MonitorApp:
             ("并购/资产", ("并购", "收购", "审批", "并表", "商誉")),
             ("财务/业绩", ("财务", "造假", "亏损", "减值", "下修")),
             ("政策/制裁", ("制裁", "出口管制", "监管", "政策")),
+            ("情绪/声誉传闻", ("黑料", "举报", "抵制", "不实", "造谣", "辟谣", "澄清", "利空", "恐慌", "踩踏", "跳水", "大跌")),
         )
         for label, words in groups:
             if any(word in text for word in words):
@@ -2535,6 +2604,7 @@ class MonitorApp:
             str(item.get("source_site") or item.get("media_name") or item.get("_source") or "未知")
             for item in top_items
         }
+        wild_source_count = sum(1 for item in top_items if int(item.get("wild_score") or 0) > 0)
         weak_total = sum(int(item.get("weak_score") or 0) for item in top_items)
         event_total = sum(int(item.get("event_score") or 0) for item in top_items)
         official_total = sum(int(item.get("official_score") or 0) for item in top_items)
@@ -2568,6 +2638,7 @@ class MonitorApp:
             "market": market,
             "event_type": dominant_type,
             "source_count": len(unique_sources),
+            "wild_source_count": wild_source_count,
             "claim": claim,
             "trigger_words": trigger_words,
         }
@@ -2681,7 +2752,7 @@ class MonitorApp:
         lines = [
             f"盘中小作文雷达：{name}",
             f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到疑似传闻/负面信息扩散。",
-            f"事件类型：{event.get('event_type', '其他传闻')}；来源数：{event.get('source_count', '-')}",
+            f"事件类型：{event.get('event_type', '其他传闻')}；来源数：{event.get('source_count', '-')}；野源数：{event.get('wild_source_count', 0)}",
             f"核心主张：{event.get('claim', '未提取到明确主张')}",
             f"触发词：{event.get('trigger_words', '无明显触发词')}",
             f"传闻热度：{rumor_heat}/100｜可信度：{credibility}/100｜杀伤力：{impact}/100｜官方反证/澄清强度：{contradiction}/100",
@@ -2698,7 +2769,8 @@ class MonitorApp:
             source = item.get("source_site") or item.get("media_name") or "未知来源"
             publish = str(item.get("publish_time") or item.get("fetch_time") or "-").replace("T", " ")[:16]
             url = item.get("article_url") or ""
-            lines.append(f"- 单条强度 {severity}{rel}｜{publish}｜{source}")
+            source_type = "野源" if int(item.get("wild_score") or 0) else "正式/聚合"
+            lines.append(f"- 单条强度 {severity}{rel}｜{source_type}｜{publish}｜{source}")
             lines.append(f"  {title}")
             if url:
                 lines.append(f"  {url}")
