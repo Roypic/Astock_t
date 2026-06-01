@@ -876,6 +876,8 @@ class MonitorApp:
                 f"- 类型：{event.get('event_type')}；来源数：{event.get('source_count')}；"
                 f"行情共振：{market.get('minute', '-')} 近15分钟 {market.get('price_drop_15m', 0)}%，量能比 {market.get('volume_ratio', 1)}"
             )
+            lines.append(f"- 核心主张：{event.get('claim', '未提取到明确主张')}")
+            lines.append(f"- 触发词：{event.get('trigger_words', '无明显触发词')}")
             for item in event.get("items", [])[:5]:
                 title = self._clean_text(str(item.get("title") or "无标题"), 88)
                 source = item.get("source_site") or item.get("media_name") or item.get("_source") or "未知来源"
@@ -2555,6 +2557,8 @@ class MonitorApp:
             event_type = str(item.get("event_type") or "其他传闻")
             event_types[event_type] = event_types.get(event_type, 0) + 1
         dominant_type = max(event_types, key=event_types.get)
+        claim = self._rumor_claim(name, top_items)
+        trigger_words = self._rumor_trigger_words(top_items)
         return {
             "items": top_items,
             "rumor_heat": rumor_heat,
@@ -2564,7 +2568,36 @@ class MonitorApp:
             "market": market,
             "event_type": dominant_type,
             "source_count": len(unique_sources),
+            "claim": claim,
+            "trigger_words": trigger_words,
         }
+
+    def _rumor_claim(self, name: str, items: list[dict[str, object]]) -> str:
+        if not items:
+            return "未提取到明确主张"
+        best = max(items, key=lambda item: int(item.get("single_score") or 0))
+        text = str(best.get("title") or best.get("summary") or best.get("content") or "")
+        text = html.unescape(re.sub(r"<[^>]+>", " ", text))
+        text = re.sub(r"\s+", " ", text).strip()
+        text = re.sub(rf"^{re.escape(name)}[:：｜|\\-\\s]*", "", text)
+        text = re.sub(r"(东方财富|雪球|股吧|财联社|证券时报|新浪财经|腾讯新闻)[:：｜|\\-\\s]*", "", text)
+        parts = re.split(r"[。；;！？!?]| - | — | _ ", text)
+        candidates = [part.strip(" ：:，,、") for part in parts if len(part.strip()) >= 6]
+        claim = candidates[0] if candidates else text
+        return self._clean_text(claim or "未提取到明确主张", 96)
+
+    def _rumor_trigger_words(self, items: list[dict[str, object]]) -> str:
+        counts: dict[str, int] = {}
+        vocab = [*RUMOR_WEAK_SOURCE_TERMS.keys(), *RUMOR_EVENT_TERMS.keys(), *SEVERE_NEGATIVE_TERMS.keys()]
+        for item in items:
+            text = self._news_body_text(item)
+            for word in vocab:
+                if word in text:
+                    counts[word] = counts.get(word, 0) + 1
+        if not counts:
+            return "无明显触发词"
+        pairs = sorted(counts.items(), key=lambda row: (-row[1], row[0]))[:8]
+        return "、".join(f"{word}({count})" for word, count in pairs)
 
     def _rumor_market_reaction(self, name: str, profile: dict[str, tuple[str, ...]], client: MarketClient) -> dict[str, float | str]:
         code = self._resolve_stock_code(name)
@@ -2649,6 +2682,8 @@ class MonitorApp:
             f"盘中小作文雷达：{name}",
             f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到疑似传闻/负面信息扩散。",
             f"事件类型：{event.get('event_type', '其他传闻')}；来源数：{event.get('source_count', '-')}",
+            f"核心主张：{event.get('claim', '未提取到明确主张')}",
+            f"触发词：{event.get('trigger_words', '无明显触发词')}",
             f"传闻热度：{rumor_heat}/100｜可信度：{credibility}/100｜杀伤力：{impact}/100｜官方反证/澄清强度：{contradiction}/100",
             f"行情共振：{market.get('minute', '-')} 近15分钟 {market.get('price_drop_15m', 0)}%，量能比 {market.get('volume_ratio', 1)}",
             f"结论：{conclusion}",
