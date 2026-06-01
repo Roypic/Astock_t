@@ -23,7 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, TModel, load_models
+from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, Security, TModel, load_models
 from notifier import PushPlusNotifier
 
 try:
@@ -70,6 +70,76 @@ NEWS_PROFILES = {
         "required": ("利通电子", "利通", "603629"),
         "theme": ("PCB", "AI服务器", "电子元器件", "服务器", "算力"),
     },
+}
+WATCH_CONCEPTS = {
+    "剑桥科技": ("CPO/光模块", "AI算力"),
+    "东山精密": ("CPO/光模块", "PCB/AI服务器"),
+    "福晶科技": ("光学/激光", "光通信"),
+    "利通电子": ("算力租赁/算力基础设施", "PCB/AI服务器"),
+}
+CONCEPT_KEYWORDS = {
+    "CPO/光模块": ("CPO", "光模块", "光通信", "800G", "1.6T"),
+    "PCB/AI服务器": ("PCB", "FPC", "AI服务器", "服务器", "高多层板"),
+    "算力租赁/算力基础设施": ("算力租赁", "算力", "数据中心", "AI服务器", "云计算"),
+    "光学/激光": ("激光晶体", "非线性晶体", "光学", "光通信"),
+    "光通信": ("光通信", "光模块", "CPO"),
+    "AI算力": ("AI算力", "算力", "数据中心", "CPO"),
+}
+CONCEPT_BASKETS = {
+    "CPO/光模块": (
+        ("中际旭创", "300308.XSHE"),
+        ("新易盛", "300502.XSHE"),
+        ("天孚通信", "300394.XSHE"),
+        ("光迅科技", "002281.XSHE"),
+        ("博创科技", "300548.XSHE"),
+        ("联特科技", "301205.XSHE"),
+        ("剑桥科技", "603083.XSHG"),
+        ("仕佳光子", "688313.XSHG"),
+    ),
+    "PCB/AI服务器": (
+        ("沪电股份", "002463.XSHE"),
+        ("胜宏科技", "300476.XSHE"),
+        ("生益电子", "688183.XSHG"),
+        ("景旺电子", "603228.XSHG"),
+        ("世运电路", "603920.XSHG"),
+        ("东山精密", "002384.XSHE"),
+        ("深南电路", "002916.XSHE"),
+        ("鹏鼎控股", "002938.XSHE"),
+    ),
+    "算力租赁/算力基础设施": (
+        ("鸿博股份", "002229.XSHE"),
+        ("中贝通信", "603220.XSHG"),
+        ("恒润股份", "603985.XSHG"),
+        ("利通电子", "603629.XSHG"),
+        ("润建股份", "002929.XSHE"),
+        ("亚康股份", "301085.XSHE"),
+        ("首都在线", "300846.XSHE"),
+        ("奥飞数据", "300738.XSHE"),
+    ),
+    "光学/激光": (
+        ("水晶光电", "002273.XSHE"),
+        ("永新光学", "603297.XSHG"),
+        ("腾景科技", "688195.XSHG"),
+        ("茂莱光学", "688502.XSHG"),
+        ("福晶科技", "002222.XSHE"),
+        ("联创电子", "002036.XSHE"),
+    ),
+    "光通信": (
+        ("光迅科技", "002281.XSHE"),
+        ("中际旭创", "300308.XSHE"),
+        ("新易盛", "300502.XSHE"),
+        ("天孚通信", "300394.XSHE"),
+        ("剑桥科技", "603083.XSHG"),
+        ("博创科技", "300548.XSHE"),
+    ),
+    "AI算力": (
+        ("中际旭创", "300308.XSHE"),
+        ("新易盛", "300502.XSHE"),
+        ("工业富联", "601138.XSHG"),
+        ("浪潮信息", "000977.XSHE"),
+        ("沪电股份", "002463.XSHE"),
+        ("胜宏科技", "300476.XSHE"),
+    ),
 }
 STOCK_CODE_HINTS = {
     "云南锗业": "002428.SZ",
@@ -416,7 +486,7 @@ class MonitorApp:
         ttk.Label(form, text="间隔秒", style="Muted.TLabel").grid(row=2, column=2, sticky=tk.E, padx=4, pady=7)
         ttk.Entry(form, textvariable=self.interval_var, width=8).grid(row=2, column=3, sticky=tk.W, padx=(8, 0), pady=7)
 
-        ttk.Label(form, text="小作文监控股", style="Muted.TLabel").grid(row=3, column=0, sticky=tk.W, padx=(0, 12), pady=7)
+        ttk.Label(form, text="自选监控池", style="Muted.TLabel").grid(row=3, column=0, sticky=tk.W, padx=(0, 12), pady=7)
         ttk.Entry(form, textvariable=self.news_watchlist_var).grid(row=3, column=1, columnspan=3, sticky=tk.EW, padx=(0, 0), pady=7)
 
         self.risk_label = tk.Label(
@@ -481,7 +551,7 @@ class MonitorApp:
         ).pack(side=tk.LEFT, padx=(0, 12))
         tk.Checkbutton(
             controls_bottom,
-            text="大盘/板块走弱",
+            text="大盘/自选板块",
             variable=self.market_alert_var,
             bg=COLORS["bg"],
             fg=COLORS["text"],
@@ -2368,9 +2438,9 @@ class MonitorApp:
         self.status_badge.configure(bg=COLORS["mint"], fg=COLORS["sage_dark"])
         notes = []
         if self.info_alert_var.get():
-            notes.append("盘中小作文雷达已开启：" + "、".join(self._watched_news_profiles().keys()))
+            notes.append("自选信息/小作文雷达已开启：" + "、".join(self._watched_news_profiles().keys()))
         if self.market_alert_var.get():
-            notes.append("大盘/板块走弱提醒已开启")
+            notes.append("自选概念板块提醒已开启")
         info_note = "，" + "，".join(notes) if notes else ""
         self._log(f"监控已启动{info_note}")
 
@@ -3086,8 +3156,8 @@ class MonitorApp:
         if index_rows:
             alerts.append(self._format_market_index_alert(index_rows, now))
 
-        for model in models:
-            basket_stats = self._basket_weak_stats(model, client)
+        for basket in self._watched_sector_baskets(models):
+            basket_stats = self._security_basket_weak_stats(basket["peers"], client)
             if not basket_stats:
                 continue
             basket_return, momentum, minute, valid_count = basket_stats
@@ -3100,7 +3170,7 @@ class MonitorApp:
             should_alert, reason, alert_level = self._market_alert_decision(
                 now,
                 "BASKET",
-                model.name,
+                str(basket["name"]),
                 level,
                 basket_return,
                 momentum,
@@ -3109,7 +3179,7 @@ class MonitorApp:
             )
             if not should_alert:
                 continue
-            alerts.append(self._format_basket_weak_alert(model, basket_return, momentum, minute, valid_count, alert_level, reason, now))
+            alerts.append(self._format_basket_weak_alert(basket, basket_return, momentum, minute, valid_count, alert_level, reason, now))
         return alerts
 
     def _intraday_weak_stats(self, prices: list[object]) -> tuple[float, float, str] | None:
@@ -3129,10 +3199,13 @@ class MonitorApp:
         return day_return, momentum, getattr(current, "minute", "-")
 
     def _basket_weak_stats(self, model: TModel, client: MarketClient) -> tuple[float, float, str, int] | None:
+        return self._security_basket_weak_stats(model.basket, client)
+
+    def _security_basket_weak_stats(self, basket: tuple[Security, ...], client: MarketClient) -> tuple[float, float, str, int] | None:
         returns = []
         momentums = []
         minutes = []
-        for peer in model.basket:
+        for peer in basket:
             stats = self._intraday_weak_stats(client.get_stock_prices(peer.code))
             if not stats:
                 continue
@@ -3140,9 +3213,87 @@ class MonitorApp:
             returns.append(day_return)
             momentums.append(momentum)
             minutes.append(minute)
-        if len(returns) < max(2, min(3, len(model.basket))):
+        if len(returns) < max(2, min(3, len(basket))):
             return None
         return sum(returns) / len(returns), sum(momentums) / len(momentums), max(minutes), len(returns)
+
+    def _watched_sector_baskets(self, models: list[TModel]) -> list[dict[str, object]]:
+        model_by_name = {model.name: model for model in models}
+        model_by_code = {self._normalize_ft_code(model.code): model for model in models}
+        baskets: list[dict[str, object]] = []
+        seen_names: set[str] = set()
+        for name, profile in self._watched_news_profiles().items():
+            code = self._watch_profile_code(name, profile)
+            concepts = self._concepts_for_watch(name, profile)
+            peers = self._concept_peers(concepts, code)
+            model = model_by_name.get(name) or model_by_code.get(self._normalize_ft_code(code))
+            if model:
+                peers = self._merge_securities(peers, model.basket, exclude_code=code)
+            if len(peers) < 2:
+                continue
+            label = f"{name}｜{'+'.join(concepts[:3]) if concepts else '自选概念'}"
+            if label in seen_names:
+                continue
+            seen_names.add(label)
+            baskets.append({"name": label, "stock": name, "code": code, "concepts": concepts, "peers": peers[:12]})
+        return baskets
+
+    def _concepts_for_watch(self, name: str, profile: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+        if name in WATCH_CONCEPTS:
+            return WATCH_CONCEPTS[name]
+        text = " ".join([name, *profile.get("theme", ()), *profile.get("aliases", ())])
+        concepts = []
+        for concept, words in CONCEPT_KEYWORDS.items():
+            if any(word and word in text for word in words):
+                concepts.append(concept)
+        return tuple(dict.fromkeys(concepts))
+
+    def _concept_peers(self, concepts: tuple[str, ...], exclude_code: str = "") -> tuple[Security, ...]:
+        peers: list[Security] = []
+        seen: set[str] = set()
+        exclude = self._normalize_ft_code(exclude_code)
+        for concept in concepts:
+            for name, code in CONCEPT_BASKETS.get(concept, ()):
+                normalized = self._normalize_ft_code(code)
+                if not normalized or normalized == exclude or normalized in seen:
+                    continue
+                seen.add(normalized)
+                peers.append(Security(name, normalized))
+        return tuple(peers)
+
+    def _merge_securities(
+        self,
+        primary: tuple[Security, ...],
+        extra: tuple[Security, ...],
+        exclude_code: str = "",
+    ) -> tuple[Security, ...]:
+        rows: list[Security] = []
+        seen: set[str] = set()
+        exclude = self._normalize_ft_code(exclude_code)
+        for peer in (*primary, *extra):
+            normalized = self._normalize_ft_code(peer.code)
+            if not normalized or normalized == exclude or normalized in seen:
+                continue
+            seen.add(normalized)
+            rows.append(Security(peer.name, normalized))
+        return tuple(rows)
+
+    def _watch_profile_code(self, name: str, profile: dict[str, tuple[str, ...]]) -> str:
+        code = self._resolve_stock_code(name)
+        if code:
+            return self._to_ft_stock_code(code)
+        for alias in profile.get("aliases", ()):
+            if re.fullmatch(r"\d{6}(\.(SH|SZ|XSHG|XSHE))?", alias.upper()):
+                return self._normalize_ft_code(alias)
+        return ""
+
+    def _normalize_ft_code(self, code: str) -> str:
+        if not code:
+            return ""
+        upper = code.upper()
+        if upper.endswith(".XSHG") or upper.endswith(".XSHE"):
+            return upper
+        return self._to_ft_stock_code(upper)
 
     def _weak_level(self, day_return: float, momentum: float, return_threshold: float, momentum_threshold: float) -> str:
         if day_return <= return_threshold * 1.7 or momentum <= momentum_threshold * 2.0:
@@ -3240,7 +3391,7 @@ class MonitorApp:
 
     def _format_basket_weak_alert(
         self,
-        model: TModel,
+        basket: dict[str, object],
         basket_return: float,
         momentum: float,
         minute: str,
@@ -3249,21 +3400,27 @@ class MonitorApp:
         reason: str,
         now: datetime,
     ) -> dict[str, str]:
-        peer_names = "、".join(peer.name for peer in model.basket[:5])
+        peers = basket.get("peers") if isinstance(basket.get("peers"), tuple) else tuple()
+        concepts = basket.get("concepts") if isinstance(basket.get("concepts"), tuple) else tuple()
+        name = str(basket.get("name") or "自选板块")
+        stock = str(basket.get("stock") or "")
+        peer_names = "、".join(peer.name for peer in peers[:6])
+        concept_text = "、".join(str(item) for item in concepts) or "自选概念"
         title_word = "修复" if level == "修复" else "走弱"
         lines = [
-            f"板块/相似股{title_word}：{model.name}（{level}）",
-            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到关联篮子状态变化。",
+            f"自选概念板块{title_word}：{stock or name}（{level}）",
+            f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到自选股关联板块状态变化。",
             f"触发原因：{reason}",
-            f"样本：{valid_count} 只相似股；{peer_names}",
+            f"匹配概念：{concept_text}",
+            f"样本：{valid_count} 只成份/相似股；{peer_names}",
             "",
             f"- {minute}｜篮子日内均值 {self._format_pct(basket_return)}｜近约5分钟 {self._format_pct(momentum)}",
             "这不是交易指令；若你正在做T或准备挂单，建议先确认大盘、板块和个股承接。",
         ]
         return {
-            "title": f"板块{title_word}提醒：{model.name}",
+            "title": f"自选板块{title_word}：{stock or name}",
             "content": "\n".join(lines),
-            "summary": f"{model.name} 相似股篮子{level}{title_word}",
+            "summary": f"{stock or name} 自选概念篮子{level}{title_word}",
         }
 
     def _drain_queue(self) -> None:
