@@ -38,6 +38,9 @@ PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
 NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
 GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 BING_SEARCH_URL = "https://cn.bing.com/search"
+EASTMONEY_STOCK_INFO_URL = "https://push2.eastmoney.com/api/qt/stock/get"
+EASTMONEY_STOCK_SECTORS_URL = "https://push2.eastmoney.com/api/qt/slist/get"
+EASTMONEY_CONCEPT_BOARDS_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/latest"
 RELEASE_PAGE_URL = "https://github.com/Roypic/Astock_t/releases/latest"
 EXE_ASSET_NAME = "AShareTSignalMonitor.exe"
@@ -80,7 +83,7 @@ WATCH_CONCEPTS = {
 CONCEPT_KEYWORDS = {
     "CPO/光模块": ("CPO", "光模块", "光通信", "800G", "1.6T"),
     "PCB/AI服务器": ("PCB", "FPC", "AI服务器", "服务器", "高多层板"),
-    "算力租赁/算力基础设施": ("算力租赁", "算力", "数据中心", "AI服务器", "云计算"),
+    "算力租赁/算力基础设施": ("算力租赁", "算力", "智算中心", "数据中心", "云计算"),
     "光学/激光": ("激光晶体", "非线性晶体", "光学", "光通信"),
     "光通信": ("光通信", "光模块", "CPO"),
     "AI算力": ("AI算力", "算力", "数据中心", "CPO"),
@@ -400,6 +403,8 @@ class MonitorApp:
         self.seen_rumor_events: dict[str, dict[str, object]] = {}
         self.seen_market_alerts: set[str] = set()
         self.market_alert_states: dict[str, dict[str, object]] = {}
+        self.sector_info_cache: dict[str, tuple[float, dict[str, object]]] = {}
+        self.concept_board_cache: tuple[float, list[dict[str, object]]] | None = None
         self.news_monitor_started_at: datetime | None = None
         self.models_dir = ensure_default_models()
         self.mascot_x = 86
@@ -3139,7 +3144,7 @@ class MonitorApp:
             if not stats:
                 continue
             day_return, momentum, minute = stats
-            level = self._weak_level(day_return, momentum, MARKET_WEAK_INDEX_THRESHOLD, MARKET_WEAK_INDEX_MOMENTUM)
+            level = self._movement_level(day_return, momentum, MARKET_WEAK_INDEX_THRESHOLD, MARKET_WEAK_INDEX_MOMENTUM)
             should_alert, reason, alert_level = self._market_alert_decision(
                 now,
                 "INDEX",
@@ -3161,12 +3166,13 @@ class MonitorApp:
             if not basket_stats:
                 continue
             basket_return, momentum, minute, valid_count = basket_stats
-            level = self._weak_level(
+            level = self._movement_level(
                 basket_return,
                 momentum,
                 MARKET_WEAK_BASKET_THRESHOLD,
                 MARKET_WEAK_BASKET_MOMENTUM,
             )
+            basket["technical"] = self._watch_technical_snapshot(str(basket.get("code") or ""), client)
             should_alert, reason, alert_level = self._market_alert_decision(
                 now,
                 "BASKET",
@@ -3224,7 +3230,8 @@ class MonitorApp:
         seen_names: set[str] = set()
         for name, profile in self._watched_news_profiles().items():
             code = self._watch_profile_code(name, profile)
-            concepts = self._concepts_for_watch(name, profile)
+            sector_info = self._fetch_eastmoney_sector_info(code)
+            concepts = self._concepts_for_watch(name, profile, sector_info)
             peers = self._concept_peers(concepts, code)
             model = model_by_name.get(name) or model_by_code.get(self._normalize_ft_code(code))
             if model:
@@ -3235,18 +3242,55 @@ class MonitorApp:
             if label in seen_names:
                 continue
             seen_names.add(label)
-            baskets.append({"name": label, "stock": name, "code": code, "concepts": concepts, "peers": peers[:12]})
+            board_rows = self._matched_concept_board_rows(concepts, sector_info)
+            baskets.append(
+                {
+                    "name": label,
+                    "stock": name,
+                    "code": code,
+                    "concepts": concepts,
+                    "remote_concepts": tuple(sector_info.get("concepts", ())) if sector_info else tuple(),
+                    "industry": str(sector_info.get("industry") or "") if sector_info else "",
+                    "sector_source": str(sector_info.get("source") or "fallback") if sector_info else "fallback",
+                    "board_rows": board_rows,
+                    "peers": peers[:12],
+                }
+            )
         return baskets
 
-    def _concepts_for_watch(self, name: str, profile: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
-        if name in WATCH_CONCEPTS:
-            return WATCH_CONCEPTS[name]
+    def _concepts_for_watch(
+        self,
+        name: str,
+        profile: dict[str, tuple[str, ...]],
+        sector_info: dict[str, object] | None = None,
+    ) -> tuple[str, ...]:
+        concepts = list(WATCH_CONCEPTS.get(name, ()))
+        remote_text = ""
+        if sector_info:
+            remote_concepts = [str(item) for item in sector_info.get("concepts", ()) if item]
+            remote_text = " ".join([str(sector_info.get("industry") or ""), *remote_concepts])
+            concepts.extend(self._map_remote_concepts(remote_text))
         text = " ".join([name, *profile.get("theme", ()), *profile.get("aliases", ())])
-        concepts = []
         for concept, words in CONCEPT_KEYWORDS.items():
-            if any(word and word in text for word in words):
+            if any(word and (word in text or word in remote_text) for word in words):
                 concepts.append(concept)
         return tuple(dict.fromkeys(concepts))
+
+    def _map_remote_concepts(self, text: str) -> tuple[str, ...]:
+        mapped = []
+        for concept, words in CONCEPT_KEYWORDS.items():
+            if any(word and word in text for word in words):
+                mapped.append(concept)
+        extra_rules = {
+            "算力租赁/算力基础设施": ("算力租赁", "智算中心", "数据中心", "东数西算"),
+            "CPO/光模块": ("共封装光学", "光模块", "CPO", "硅光"),
+            "PCB/AI服务器": ("PCB", "印制电路板", "服务器", "英伟达概念"),
+            "AI算力": ("人工智能", "AI", "算力", "英伟达"),
+        }
+        for concept, words in extra_rules.items():
+            if any(word in text for word in words):
+                mapped.append(concept)
+        return tuple(dict.fromkeys(mapped))
 
     def _concept_peers(self, concepts: tuple[str, ...], exclude_code: str = "") -> tuple[Security, ...]:
         peers: list[Security] = []
@@ -3295,11 +3339,243 @@ class MonitorApp:
             return upper
         return self._to_ft_stock_code(upper)
 
+    def _eastmoney_secid(self, code: str) -> tuple[str, str]:
+        ft_code = self._normalize_ft_code(code)
+        raw = ft_code.split(".")[0] if ft_code else code.split(".")[0]
+        market = "1" if ft_code.endswith(".XSHG") or raw.startswith("6") else "0"
+        return f"{market}.{raw.zfill(6)}", raw.zfill(6)
+
+    def _fetch_eastmoney_sector_info(self, code: str) -> dict[str, object]:
+        if not code:
+            return {}
+        ft_code = self._normalize_ft_code(code)
+        now = time.time()
+        cached = self.sector_info_cache.get(ft_code)
+        if cached and now - cached[0] < 1800:
+            return cached[1]
+
+        secid, code6 = self._eastmoney_secid(ft_code)
+        result: dict[str, object] = {"code": code6, "name": "", "industry": "", "concepts": [], "source": "eastmoney", "error": ""}
+        try:
+            params = urllib.parse.urlencode({"secid": secid, "fields": "f57,f58,f127", "ut": "fa5fd1943c7b386f172d6893dbfba10b"})
+            req = urllib.request.Request(
+                f"{EASTMONEY_STOCK_INFO_URL}?{params}",
+                headers={"User-Agent": "Mozilla/5.0 AShareTSignalMonitor/1.0", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            row = data.get("data") if isinstance(data, dict) else {}
+            if isinstance(row, dict):
+                result["name"] = row.get("f58") or ""
+                result["industry"] = row.get("f127") or ""
+        except Exception as exc:
+            result["error"] = f"info:{exc}"
+
+        try:
+            params = urllib.parse.urlencode({"secid": secid, "fields": "f12,f14", "spt": "3", "ut": "fa5fd1943c7b386f172d6893dbfba10b"})
+            req = urllib.request.Request(
+                f"{EASTMONEY_STOCK_SECTORS_URL}?{params}",
+                headers={"User-Agent": "Mozilla/5.0 AShareTSignalMonitor/1.0", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            diff = data.get("data", {}).get("diff", []) if isinstance(data, dict) else []
+            concepts = []
+            for item in diff if isinstance(diff, list) else []:
+                concept = str(item.get("f14") or "").strip()
+                if concept and concept not in concepts:
+                    concepts.append(concept)
+            result["concepts"] = concepts
+        except Exception as exc:
+            result["error"] = f"{result.get('error')};concepts:{exc}".strip(";")
+
+        self.sector_info_cache[ft_code] = (now, result)
+        return result
+
+    def _fetch_eastmoney_concept_boards(self) -> list[dict[str, object]]:
+        now = time.time()
+        if self.concept_board_cache and now - self.concept_board_cache[0] < 180:
+            return self.concept_board_cache[1]
+        params = urllib.parse.urlencode(
+            {
+                "pn": 1,
+                "pz": 300,
+                "po": 1,
+                "np": 1,
+                "fltt": 2,
+                "invt": 2,
+                "fs": "m:90+t:3+f:!50",
+                "fields": "f12,f14,f2,f3,f4,f8,f20,f21,f62",
+                "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+            }
+        )
+        rows: list[dict[str, object]] = []
+        try:
+            req = urllib.request.Request(
+                f"{EASTMONEY_CONCEPT_BOARDS_URL}?{params}",
+                headers={"User-Agent": "Mozilla/5.0 AShareTSignalMonitor/1.0", "Accept": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            diff = data.get("data", {}).get("diff", []) if isinstance(data, dict) else []
+            for item in diff if isinstance(diff, list) else []:
+                rows.append(
+                    {
+                        "code": item.get("f12"),
+                        "name": item.get("f14"),
+                        "price": self._safe_float(item.get("f2")),
+                        "change_pct": self._safe_float(item.get("f3")),
+                        "turnover_rate": self._safe_float(item.get("f8")),
+                        "market_cap": self._safe_float(item.get("f20")),
+                        "free_cap": self._safe_float(item.get("f21")),
+                        "main_net": self._safe_float(item.get("f62")),
+                    }
+                )
+        except Exception:
+            rows = []
+        self.concept_board_cache = (now, rows)
+        return rows
+
+    def _matched_concept_board_rows(
+        self,
+        concepts: tuple[str, ...],
+        sector_info: dict[str, object] | None = None,
+    ) -> tuple[dict[str, object], ...]:
+        board_rows = self._fetch_eastmoney_concept_boards()
+        if not board_rows:
+            return tuple()
+        remote_terms = [str(item) for item in (sector_info or {}).get("concepts", ()) if item]
+        query_terms = list(concepts) + remote_terms
+        matched: list[dict[str, object]] = []
+        for row in board_rows:
+            board_name = str(row.get("name") or "")
+            if not board_name:
+                continue
+            for term in query_terms:
+                words = CONCEPT_KEYWORDS.get(term, (term,))
+                if term in board_name or board_name in term or any(word and word in board_name for word in words):
+                    matched.append(row)
+                    break
+        matched.sort(key=lambda row: abs(float(row.get("change_pct") or 0)), reverse=True)
+        return tuple(matched[:5])
+
+    def _safe_float(self, value: object) -> float | None:
+        try:
+            if value in (None, "-", ""):
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _watch_technical_snapshot(self, code: str, client: MarketClient) -> dict[str, object]:
+        ft_code = self._normalize_ft_code(code)
+        if not ft_code:
+            return {"grade": "低置信", "summary": "未识别代码", "invalidation": "缺少数据"}
+        try:
+            prices = client.get_stock_prices(ft_code)
+            trend = client.get_daily_trend(ft_code)
+        except Exception as exc:
+            return {"grade": "低置信", "summary": f"技术数据缺失：{exc}", "invalidation": "缺少数据"}
+        if not prices:
+            return {"grade": "低置信", "summary": "分时数据不足", "invalidation": "缺少分时"}
+        latest = prices[-1]
+        price = float(getattr(latest, "price", 0.0) or 0.0)
+        avg_price = float(getattr(latest, "avg_price", 0.0) or price)
+        ma5 = trend.get("ma5") if isinstance(trend, dict) else None
+        ma10 = trend.get("ma10") if isinstance(trend, dict) else None
+        ma20 = trend.get("ma20") if isinstance(trend, dict) else None
+        ma_values = [value for value in (ma5, ma10, ma20) if isinstance(value, (int, float)) and value > 0]
+        above_count = sum(1 for value in ma_values if price >= float(value))
+        below_avg = avg_price > 0 and price < avg_price
+        above_avg = avg_price > 0 and price >= avg_price
+        if len(ma_values) >= 3 and above_count == 3 and above_avg:
+            grade = "A"
+            summary = "价格站上 MA5/10/20 且不弱于盘中均价，趋势承接较好"
+            invalidation = "跌回盘中均价且跌破 MA5，做T信号降级"
+        elif ma_values and above_count >= max(1, len(ma_values) - 1):
+            grade = "B"
+            summary = "均线结构尚可，但需要量价继续确认"
+            invalidation = "跌破 MA10 或盘中均价，观察优先"
+        elif below_avg or (ma_values and above_count <= 1):
+            grade = "C"
+            summary = "价格偏弱或均线承接不足，做T需要更高价差补偿"
+            invalidation = "继续跌破 MA20/日内低点，暂停正T"
+        else:
+            grade = "D"
+            summary = "关键均线数据不足或结构不清晰"
+            invalidation = "等待重新站回均价和短均线"
+        return {
+            "grade": grade,
+            "summary": summary,
+            "invalidation": invalidation,
+            "price": price,
+            "avg_price": avg_price,
+            "ma5": ma5,
+            "ma10": ma10,
+            "ma20": ma20,
+        }
+
+    def _basket_action_plan(
+        self,
+        level: str,
+        reason: str,
+        basket_return: float,
+        momentum: float,
+        technical: dict[str, object],
+        board_rows: tuple[dict[str, object], ...],
+    ) -> dict[str, str]:
+        grade = str(technical.get("grade") or "低置信")
+        board_text = self._concept_board_digest(board_rows)
+        if "严重走弱" in level or (grade in ("C", "D") and "走弱" in level):
+            action = "强风险"
+            risk = "板块与个股结构共振偏弱，做T入场应降频，优先保护仓位。"
+        elif "警戒走弱" in level:
+            action = "谨慎"
+            risk = "板块短线转弱，只有个股承接明显强于篮子时才考虑。"
+        elif "走强" in level and grade in ("A", "B"):
+            action = "可观察"
+            risk = "板块转强但仍需防止冲高回落，避免把情绪脉冲当趋势。"
+        elif level == "修复":
+            action = "修复观察"
+            risk = "弱势缓和，不等于趋势反转，需看下一段量价能否延续。"
+        else:
+            action = "观察"
+            risk = "数据不足或信号中性，等待更明确方向。"
+        trigger = f"{level}：{reason}；篮子日内 {self._format_pct(basket_return)}，近5分钟 {self._format_pct(momentum)}"
+        if board_text:
+            trigger += f"；概念热度：{board_text}"
+        invalidation = str(technical.get("invalidation") or "若板块动量反向并放量，当前判断失效")
+        return {"action": action, "trigger": trigger, "invalidation": invalidation, "risk": risk}
+
+    def _concept_board_digest(self, rows: tuple[dict[str, object], ...]) -> str:
+        parts = []
+        for row in rows[:3]:
+            name = str(row.get("name") or "")
+            pct = row.get("change_pct")
+            turnover = row.get("turnover_rate")
+            main_net = row.get("main_net")
+            if not name:
+                continue
+            pct_text = f"{float(pct):+.2f}%" if isinstance(pct, (int, float)) else "-"
+            turn_text = f"，换手{float(turnover):.2f}%" if isinstance(turnover, (int, float)) else ""
+            fund_text = f"，主力{float(main_net) / 100000000:+.2f}亿" if isinstance(main_net, (int, float)) else ""
+            parts.append(f"{name}{pct_text}{turn_text}{fund_text}")
+        return "；".join(parts)
+
     def _weak_level(self, day_return: float, momentum: float, return_threshold: float, momentum_threshold: float) -> str:
+        return self._movement_level(day_return, momentum, return_threshold, momentum_threshold)
+
+    def _movement_level(self, day_return: float, momentum: float, return_threshold: float, momentum_threshold: float) -> str:
         if day_return <= return_threshold * 1.7 or momentum <= momentum_threshold * 2.0:
-            return "严重"
+            return "严重走弱"
         if day_return <= return_threshold or momentum <= momentum_threshold:
-            return "警戒"
+            return "警戒走弱"
+        strong_return = abs(return_threshold)
+        strong_momentum = abs(momentum_threshold)
+        if day_return >= strong_return * 1.7 or momentum >= strong_momentum * 2.0:
+            return "严重走强"
+        if day_return >= strong_return or momentum >= strong_momentum:
+            return "警戒走强"
         return ""
 
     def _market_alert_decision(
@@ -3329,12 +3605,15 @@ class MonitorApp:
             if not last_alert_level:
                 reason = f"首次进入{level}区间"
             elif self._weak_level_rank(level) > self._weak_level_rank(last_alert_level):
-                reason = f"风险升级：{last_alert_level} -> {level}"
+                reason = f"状态升级：{last_alert_level} -> {level}"
             elif isinstance(last_alert_return, (int, float)) and abs(day_return - float(last_alert_return)) >= MARKET_ALERT_RETURN_STEP:
-                direction = "扩大" if day_return < float(last_alert_return) else "收敛"
+                if "走强" in level:
+                    direction = "增强" if day_return > float(last_alert_return) else "回落"
+                else:
+                    direction = "扩大" if day_return < float(last_alert_return) else "收敛"
                 reason = f"日内幅度明显{direction}"
             elif isinstance(last_alert_momentum, (int, float)) and abs(momentum - float(last_alert_momentum)) >= MARKET_ALERT_MOMENTUM_STEP:
-                direction = "转弱" if momentum < float(last_alert_momentum) else "修复"
+                direction = "增强" if momentum > float(last_alert_momentum) else "转弱"
                 reason = f"近5分钟动量明显{direction}"
         elif active_level and isinstance(prev_momentum, (int, float)) and momentum >= MARKET_ALERT_TURN_MOMENTUM:
             alert_level = "修复"
@@ -3361,7 +3640,7 @@ class MonitorApp:
         return bool(reason), reason, alert_level
 
     def _weak_level_rank(self, level: str) -> int:
-        return {"修复": 0, "警戒": 1, "严重": 2}.get(level, 0)
+        return {"修复": 0, "警戒走强": 1, "警戒走弱": 1, "严重走强": 2, "严重走弱": 2}.get(level, 0)
 
     def _market_alert_key(self, now: datetime, category: str, name: str, level: str) -> str:
         bucket_minute = (now.minute // 30) * 30
@@ -3371,8 +3650,12 @@ class MonitorApp:
         return f"{value * 100:+.2f}%"
 
     def _format_market_index_alert(self, rows: list[tuple[str, float, float, str, str, str]], now: datetime) -> dict[str, str]:
-        worst_level = "严重" if any(row[4] == "严重" for row in rows) else ("警戒" if any(row[4] == "警戒" for row in rows) else "修复")
-        title_word = "走弱" if worst_level != "修复" else "修复"
+        worst_level = "严重走弱" if any(row[4] == "严重走弱" for row in rows) else (
+            "严重走强" if any(row[4] == "严重走强" for row in rows) else (
+                "警戒走弱" if any(row[4] == "警戒走弱" for row in rows) else ("警戒走强" if any(row[4] == "警戒走强" for row in rows) else "修复")
+            )
+        )
+        title_word = "修复" if worst_level == "修复" else ("走强" if "走强" in worst_level else "走弱")
         lines = [
             f"大盘{title_word}提醒（{worst_level}）",
             f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到指数状态变化。",
@@ -3402,16 +3685,31 @@ class MonitorApp:
     ) -> dict[str, str]:
         peers = basket.get("peers") if isinstance(basket.get("peers"), tuple) else tuple()
         concepts = basket.get("concepts") if isinstance(basket.get("concepts"), tuple) else tuple()
+        remote_concepts = basket.get("remote_concepts") if isinstance(basket.get("remote_concepts"), tuple) else tuple()
+        board_rows = basket.get("board_rows") if isinstance(basket.get("board_rows"), tuple) else tuple()
+        technical = basket.get("technical") if isinstance(basket.get("technical"), dict) else {}
         name = str(basket.get("name") or "自选板块")
         stock = str(basket.get("stock") or "")
+        industry = str(basket.get("industry") or "")
+        sector_source = str(basket.get("sector_source") or "fallback")
         peer_names = "、".join(peer.name for peer in peers[:6])
         concept_text = "、".join(str(item) for item in concepts) or "自选概念"
-        title_word = "修复" if level == "修复" else "走弱"
+        remote_text = "、".join(str(item) for item in remote_concepts[:8]) or "无/接口为空"
+        title_word = "修复" if level == "修复" else ("走强" if "走强" in level else "走弱")
+        action_plan = self._basket_action_plan(level, reason, basket_return, momentum, technical, board_rows)
+        board_digest = self._concept_board_digest(board_rows)
         lines = [
             f"自选概念板块{title_word}：{stock or name}（{level}）",
             f"北京时间 {now.strftime('%Y-%m-%d %H:%M')} 检测到自选股关联板块状态变化。",
-            f"触发原因：{reason}",
+            f"action_grade：{action_plan['action']}",
+            f"trigger：{action_plan['trigger']}",
+            f"invalidation：{action_plan['invalidation']}",
+            f"risk：{action_plan['risk']}",
+            "",
             f"匹配概念：{concept_text}",
+            f"东财行业：{industry or '未知'}；东财概念：{remote_text}；来源：{sector_source}",
+            f"概念板块热度：{board_digest or '未匹配到东财概念板块行情'}",
+            f"技术结构：{technical.get('grade', '低置信')}｜{technical.get('summary', '技术数据不足')}",
             f"样本：{valid_count} 只成份/相似股；{peer_names}",
             "",
             f"- {minute}｜篮子日内均值 {self._format_pct(basket_return)}｜近约5分钟 {self._format_pct(momentum)}",
