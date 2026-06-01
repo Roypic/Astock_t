@@ -36,6 +36,7 @@ MARKET_WEAK_INTERVAL_SECONDS = 300
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
 NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
 GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
+BING_SEARCH_URL = "https://cn.bing.com/search"
 LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/latest"
 RELEASE_PAGE_URL = "https://github.com/Roypic/Astock_t/releases/latest"
 EXE_ASSET_NAME = "AShareTSignalMonitor.exe"
@@ -903,6 +904,8 @@ class MonitorApp:
                 f"野源数：{event.get('wild_source_count', 0)}；"
                 f"行情共振：{market.get('minute', '-')} 近15分钟 {market.get('price_drop_15m', 0)}%，量能比 {market.get('volume_ratio', 1)}"
             )
+            if int(event.get("wild_source_count") or 0) == 0:
+                lines.append("- 覆盖提示：未命中微博/X/股吧/雪球原始野源，当前结果可能只是正规新闻或聚合噪音。")
             lines.append(f"- 核心主张：{event.get('claim', '未提取到明确主张')}")
             lines.append(f"- 触发词：{event.get('trigger_words', '无明显触发词')}")
             for item in event.get("items", [])[:5]:
@@ -2504,7 +2507,12 @@ class MonitorApp:
             except Exception as exc:
                 self.queue.put(("log", f"小作文 Google 搜索失败：{query}｜{exc}"))
                 rss_items = []
-            for item in [*ft_items, *rss_items]:
+            try:
+                web_items = self._search_bing_web(query, start, now, limit=10)
+            except Exception as exc:
+                self.queue.put(("log", f"小作文网页搜索失败：{query}｜{exc}"))
+                web_items = []
+            for item in [*ft_items, *rss_items, *web_items]:
                 key = item.get("article_url") or item.get("news_id") or item.get("title")
                 if not key or key in seen:
                     continue
@@ -2520,6 +2528,70 @@ class MonitorApp:
             if self._rumor_entity_match(name, profile, item)
         ]
         return ranked
+
+    def _search_bing_web(
+        self,
+        query: str,
+        start: datetime,
+        end: datetime,
+        limit: int = 10,
+    ) -> list[dict[str, object]]:
+        params = {
+            "q": query,
+            "ensearch": "0",
+            "setlang": "zh-CN",
+            "cc": "cn",
+            "count": str(limit),
+        }
+        url = BING_SEARCH_URL + "?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AShareTSignalMonitor/1.0",
+                "Accept": "text/html,application/xhtml+xml",
+                "Connection": "close",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            html_text = resp.read().decode("utf-8", errors="ignore")
+        rows = []
+        for match in re.finditer(r'<li class="b_algo".*?<h2.*?<a href="([^"]+)".*?>(.*?)</a>.*?(?:<p>(.*?)</p>)?', html_text, re.S):
+            link = html.unescape(match.group(1)).strip()
+            title = self._clean_html(match.group(2))
+            summary = self._clean_html(match.group(3) or "")
+            if not title or not link:
+                continue
+            source = self._source_from_url(link)
+            rows.append(
+                {
+                    "title": title,
+                    "summary": summary,
+                    "article_url": link,
+                    "source_site": source,
+                    "publish_time": end.strftime("%Y-%m-%d %H:%M:%S"),
+                    "_source": "Bing Web",
+                    "_query": query,
+                }
+            )
+            if len(rows) >= limit:
+                break
+        return rows
+
+    def _clean_html(self, value: str) -> str:
+        text = re.sub(r"<[^>]+>", " ", html.unescape(value or ""))
+        return " ".join(text.split())
+
+    def _source_from_url(self, url: str) -> str:
+        host = urllib.parse.urlparse(url).netloc.lower()
+        if "weibo.com" in host:
+            return "微博"
+        if "x.com" in host or "twitter.com" in host:
+            return "X/Twitter"
+        if "guba.eastmoney.com" in host:
+            return "东方财富股吧"
+        if "xueqiu.com" in host:
+            return "雪球"
+        return host or "Bing Web"
 
     def _rumor_item_score(self, name: str, profile: dict[str, tuple[str, ...]], item: dict[str, object]) -> dict[str, int | str]:
         text = self._news_body_text(item)
@@ -2613,6 +2685,9 @@ class MonitorApp:
         rumor_heat = min(100, len(top_items) * 12 + len(unique_sources) * 8 + weak_total + freshness_bonus)
         credibility = min(100, official_total + len(unique_sources) * 7 + max(0, 18 - weak_total // 2))
         impact = min(100, event_total * 3 + negative_total * 5 + weak_total * 2 + rumor_heat // 3)
+        if wild_source_count == 0 and weak_total < 10:
+            rumor_heat = min(rumor_heat, 55)
+            impact = min(impact, 55)
         contradiction = 0
         if official_total and weak_total:
             contradiction = min(100, official_total + weak_total * 2)
@@ -2757,6 +2832,7 @@ class MonitorApp:
             f"触发词：{event.get('trigger_words', '无明显触发词')}",
             f"传闻热度：{rumor_heat}/100｜可信度：{credibility}/100｜杀伤力：{impact}/100｜官方反证/澄清强度：{contradiction}/100",
             f"行情共振：{market.get('minute', '-')} 近15分钟 {market.get('price_drop_15m', 0)}%，量能比 {market.get('volume_ratio', 1)}",
+            f"覆盖提示：{'已命中野源原文' if int(event.get('wild_source_count') or 0) else '未命中微博/X/股吧/雪球原始野源，可能只是正规新闻或聚合噪音'}",
             f"结论：{conclusion}",
             "这不是交易指令，请优先核对原文/公告，并结合盘中量价处理风险。",
             "",
