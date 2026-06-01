@@ -364,6 +364,7 @@ class MonitorApp:
         ttk.Button(controls, text="模型盘前", style="Ghost.TButton", command=self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="信息面盘前", style="Ghost.TButton", command=self._show_info_premarket).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="自选信息面", style="Ghost.TButton", command=self._open_custom_info_window).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls, text="自选走势", style="Ghost.TButton", command=self._open_watch_chart_window).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="AI研报", style="Ghost.TButton", command=self._open_research_report_window).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="更新程序", style="Ghost.TButton", command=self._check_update).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
@@ -713,6 +714,230 @@ class MonitorApp:
         )
         return "\n".join(lines)
 
+    def _open_watch_chart_window(self) -> None:
+        window = tk.Toplevel(self.root)
+        window.title("自选走势")
+        window.geometry("980x680")
+        window.configure(bg=COLORS["bg"])
+
+        panel = ttk.Frame(window, style="Card.TFrame", padding=14)
+        panel.pack(fill=tk.X, padx=14, pady=(14, 8))
+        panel.columnconfigure(1, weight=1)
+
+        query_var = tk.StringVar(value="剑桥科技")
+        period_var = tk.StringVar(value="日线")
+        status_var = tk.StringVar(value="输入股票名或代码，查看分时/日线/周线/月线及支撑压力。")
+
+        ttk.Label(panel, text="股票", style="Muted.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        entry = ttk.Entry(panel, textvariable=query_var)
+        entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 10))
+        period_box = ttk.Combobox(panel, textvariable=period_var, values=("分时", "日线", "周线", "月线"), width=8, state="readonly")
+        period_box.grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
+
+        canvas = tk.Canvas(window, bg=COLORS["card"], highlightthickness=0)
+        canvas.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
+        summary = tk.Text(window, height=5, wrap=tk.WORD, bg=COLORS["card_soft"], fg=COLORS["text"], relief=tk.FLAT, padx=12, pady=10, font=("Microsoft YaHei UI", 9))
+        summary.pack(fill=tk.X, padx=14, pady=(0, 8))
+        tk.Label(window, textvariable=status_var, bg=COLORS["bg"], fg=COLORS["muted"], anchor=tk.W, font=("Microsoft YaHei UI", 9)).pack(fill=tk.X, padx=16, pady=(0, 10))
+
+        def run_chart() -> None:
+            query = query_var.get().strip()
+            if not query:
+                messagebox.showwarning("缺少股票", "请输入股票名称或代码，例如 剑桥科技 / 603083.SH。")
+                return
+            status_var.set("正在获取走势数据...")
+            summary.configure(state=tk.NORMAL)
+            summary.delete("1.0", tk.END)
+            summary.insert(tk.END, "正在计算支撑、压力和筹码峰...\n")
+            summary.configure(state=tk.DISABLED)
+            canvas.delete("all")
+
+            def worker() -> None:
+                try:
+                    payload = self._build_chart_payload(query, period_var.get())
+                    payload.update({"canvas": canvas, "summary": summary, "status": status_var})
+                    self.queue.put(("chart_result", payload))
+                except Exception as exc:
+                    self.queue.put(("chart_result", {"canvas": canvas, "summary": summary, "status": status_var, "error": str(exc)}))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        ttk.Button(panel, text="查看走势", style="Primary.TButton", command=run_chart).grid(row=0, column=3, sticky=tk.E)
+        entry.bind("<Return>", lambda _event: run_chart())
+        period_box.bind("<<ComboboxSelected>>", lambda _event: run_chart())
+        entry.focus_set()
+
+    def _build_chart_payload(self, query: str, period: str) -> dict[str, object]:
+        code = self._resolve_stock_code(query)
+        if not code:
+            raise RuntimeError("没有识别到股票代码，请输入 6 位代码或已内置的股票简称。")
+        ft_code = self._to_ft_stock_code(code)
+        rows = self._fetch_intraday_chart_rows(ft_code) if period == "分时" else self._fetch_ohlc_chart_rows(ft_code, period)
+        if len(rows) < 2:
+            raise RuntimeError("走势数据不足，可能非交易时间或接口暂时无数据。")
+        levels = self._chart_levels(rows)
+        info = self._fetch_security_info(code)
+        name = str(info.get("symbol_name") or query)
+        return {"query": query, "name": name, "code": code, "period": period, "rows": rows, "levels": levels}
+
+    def _to_ft_stock_code(self, code: str) -> str:
+        upper = code.upper()
+        if upper.endswith(".SH"):
+            return upper.replace(".SH", ".XSHG")
+        if upper.endswith(".SZ"):
+            return upper.replace(".SZ", ".XSHE")
+        if re.fullmatch(r"\d{6}", upper):
+            return f"{upper}.XSHG" if upper.startswith("6") else f"{upper}.XSHE"
+        return upper
+
+    def _fetch_intraday_chart_rows(self, ft_code: str) -> list[dict[str, float | str]]:
+        prices = MarketClient(ttl_seconds=20).get_stock_prices(ft_code)
+        return [{"label": item.minute, "close": item.price, "high": item.price, "low": item.price, "volume": item.volume} for item in prices]
+
+    def _fetch_ohlc_chart_rows(self, ft_code: str, period: str) -> list[dict[str, float | str]]:
+        span = {"日线": "DAY1", "周线": "WEEK1", "月线": "MONTH1"}.get(period, "DAY1")
+        query = urllib.parse.urlencode({"span": span, "limit": 160})
+        url = f"https://market.ft.tech/app/api/v2/stocks/{urllib.parse.quote(ft_code)}/ohlcs?{query}"
+        req = urllib.request.Request(url, headers={"X-Client-Name": "ft-claw", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        rows: list[dict[str, float | str]] = []
+        for item in data.get("ohlcs", []):
+            if not isinstance(item, dict) or "c" not in item:
+                continue
+            ts = item.get("tm") or item.get("ctm") or item.get("otm")
+            label = "-"
+            if isinstance(ts, int):
+                label = datetime.fromtimestamp(ts / 1000, BEIJING_TZ).strftime("%m-%d")
+            close = float(item["c"])
+            rows.append({"label": label, "close": close, "high": float(item.get("h") or close), "low": float(item.get("l") or close), "volume": float(item.get("v") or 1)})
+        return rows
+
+    def _chart_levels(self, rows: list[dict[str, float | str]]) -> dict[str, float]:
+        level_rows = rows[-min(30, len(rows)) :]
+        volume_rows = rows[-min(80, len(rows)) :]
+        closes = [float(row["close"]) for row in level_rows]
+        lows = [float(row.get("low") or row["close"]) for row in level_rows]
+        highs = [float(row.get("high") or row["close"]) for row in level_rows]
+        current = closes[-1]
+        sorted_lows = sorted(lows)
+        sorted_highs = sorted(highs)
+        support_candidates = [
+            sorted_lows[max(0, int(len(sorted_lows) * ratio) - 1)]
+            for ratio in (0.28, 0.38, 0.50)
+        ]
+        support_below = [value for value in support_candidates if value < current]
+        support = max(support_below) if support_below else min(lows)
+        resistance_candidates = [
+            sorted_highs[min(len(sorted_highs) - 1, int(len(sorted_highs) * ratio))]
+            for ratio in (0.62, 0.78, 0.90)
+        ]
+        resistance_above = [value for value in resistance_candidates if value > current]
+        resistance = min(resistance_above) if resistance_above else max(highs)
+        low = min(lows)
+        high = max(highs)
+        chip_peak = current
+        if high > low:
+            bins = [0.0] * 24
+            step = (high - low) / len(bins)
+            for row in volume_rows:
+                price = float(row["close"])
+                volume = max(1.0, float(row.get("volume") or 1))
+                index = min(len(bins) - 1, max(0, int((price - low) / step)))
+                bins[index] += volume
+            max_index = max(range(len(bins)), key=lambda idx: bins[idx])
+            chip_peak = low + (max_index + 0.5) * step
+        return {"current": current, "support": support, "resistance": resistance, "chip_peak": chip_peak, "low": low, "high": high}
+
+    def _render_chart_payload(self, payload: dict[str, object]) -> None:
+        canvas = payload.get("canvas")
+        summary = payload.get("summary")
+        status_var = payload.get("status")
+        if payload.get("error"):
+            if hasattr(status_var, "set"):
+                status_var.set("走势获取失败")
+            if hasattr(summary, "configure") and hasattr(summary, "insert"):
+                summary.configure(state=tk.NORMAL)
+                summary.delete("1.0", tk.END)
+                summary.insert(tk.END, f"走势获取失败：{payload.get('error')}")
+                summary.configure(state=tk.DISABLED)
+            return
+        rows = payload.get("rows")
+        levels = payload.get("levels")
+        if not hasattr(canvas, "create_line") or not isinstance(rows, list) or not isinstance(levels, dict):
+            return
+        self._draw_price_chart(canvas, rows, levels, str(payload.get("name") or ""), str(payload.get("period") or ""))
+        if hasattr(summary, "configure") and hasattr(summary, "insert"):
+            summary.configure(state=tk.NORMAL)
+            summary.delete("1.0", tk.END)
+            summary.insert(tk.END, self._chart_summary_text(payload))
+            summary.configure(state=tk.DISABLED)
+        if hasattr(status_var, "set"):
+            status_var.set("走势更新完成")
+
+    def _draw_price_chart(self, canvas: tk.Canvas, rows: list[dict[str, float | str]], levels: dict[str, float], name: str, period: str) -> None:
+        canvas.update_idletasks()
+        width = max(760, canvas.winfo_width())
+        height = max(380, canvas.winfo_height())
+        canvas.delete("all")
+        pad_left, pad_right, pad_top, pad_bottom = 58, 86, 34, 42
+        lows = [float(row.get("low") or row["close"]) for row in rows]
+        highs = [float(row.get("high") or row["close"]) for row in rows]
+        min_price = min(min(lows), float(levels.get("support", lows[-1])), float(levels.get("chip_peak", lows[-1])))
+        max_price = max(max(highs), float(levels.get("resistance", highs[-1])), float(levels.get("chip_peak", highs[-1])))
+        spread = max_price - min_price or 1.0
+        min_price -= spread * 0.08
+        max_price += spread * 0.08
+
+        def x_at(index: int) -> float:
+            return pad_left + index * (width - pad_left - pad_right) / max(1, len(rows) - 1)
+
+        def y_at(price: float) -> float:
+            return pad_top + (max_price - price) * (height - pad_top - pad_bottom) / (max_price - min_price)
+
+        for i in range(5):
+            y = pad_top + i * (height - pad_top - pad_bottom) / 4
+            price = max_price - i * (max_price - min_price) / 4
+            canvas.create_line(pad_left, y, width - pad_right, y, fill="#E7DED0")
+            canvas.create_text(12, y, text=f"{price:.2f}", anchor=tk.W, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
+
+        points = []
+        for index, row in enumerate(rows):
+            points.extend([x_at(index), y_at(float(row["close"]))])
+            if period != "分时":
+                x = x_at(index)
+                canvas.create_line(x, y_at(float(row.get("low") or row["close"])), x, y_at(float(row.get("high") or row["close"])), fill="#B8C9BD")
+        if len(points) >= 4:
+            canvas.create_line(*points, fill=COLORS["sage_dark"], width=2, smooth=True)
+
+        for label, price, color in (
+            ("压力", float(levels["resistance"]), COLORS["danger"]),
+            ("筹码峰", float(levels["chip_peak"]), COLORS["coral"]),
+            ("支撑", float(levels["support"]), COLORS["sage_dark"]),
+        ):
+            y = y_at(price)
+            canvas.create_line(pad_left, y, width - pad_right, y, fill=color, dash=(6, 4), width=1)
+            canvas.create_text(width - pad_right + 8, y, text=f"{label} {price:.2f}", anchor=tk.W, fill=color, font=("Microsoft YaHei UI", 9, "bold"))
+
+        canvas.create_text(pad_left, 18, text=f"{name} {period} 走势", anchor=tk.W, fill=COLORS["text"], font=("Microsoft YaHei UI", 12, "bold"))
+        canvas.create_text(pad_left, height - 18, text=str(rows[0].get("label") or ""), anchor=tk.W, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
+        canvas.create_text(width - pad_right, height - 18, text=str(rows[-1].get("label") or ""), anchor=tk.E, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
+
+    def _chart_summary_text(self, payload: dict[str, object]) -> str:
+        levels = payload.get("levels") if isinstance(payload.get("levels"), dict) else {}
+        rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+        current = float(levels.get("current") or 0)
+        support = float(levels.get("support") or 0)
+        resistance = float(levels.get("resistance") or 0)
+        chip_peak = float(levels.get("chip_peak") or 0)
+        support_gap = (current / support - 1) * 100 if support else 0.0
+        resistance_gap = (resistance / current - 1) * 100 if current else 0.0
+        return (
+            f"{payload.get('name')}（{payload.get('code')}）{payload.get('period')}，样本 {len(rows)} 条。\n"
+            f"现价/最新：{current:.2f}；支撑位：{support:.2f}（距现价 {support_gap:.1f}%）；压力位：{resistance:.2f}（上方空间 {resistance_gap:.1f}%）；筹码峰：{chip_peak:.2f}。\n"
+            "支撑/压力来自近段高低价分位，筹码峰来自成交量加权价格分布；它们是辅助观察线，不是自动买卖建议。"
+        )
+
     def _open_research_report_window(self) -> None:
         window = tk.Toplevel(self.root)
         window.title("AI研报生成")
@@ -804,6 +1029,8 @@ class MonitorApp:
         lines.extend(self._research_global_peer_section(symbol))
         lines.append("")
         lines.extend(self._research_expectation_section(symbol, name, info, industry_ranked, peer_infos))
+        lines.append("")
+        lines.extend(self._research_target_distribution_section(info, peer_infos, industry_ranked))
         lines.append("")
         lines.extend(self._research_action_risk_section(symbol, name, info, industry_ranked, peer_infos))
         lines.append("")
@@ -1007,6 +1234,123 @@ class MonitorApp:
             return "乐观：锗价强势+InP/GaAs 放量，利润弹性兑现；中性：锗价高位震荡、项目逐步爬坡；悲观：产品价格回落或项目爬坡慢，高估值承压。"
         return f"乐观：行业景气和公司份额共振；中性：估值跟随基本面缓慢消化；悲观：{valuation_note} 且业绩兑现不及预期。"
 
+    def _research_target_distribution_section(
+        self,
+        info: dict[str, object],
+        peers: list[dict[str, object]],
+        items: list[dict[str, object]],
+    ) -> list[str]:
+        lines = ["七、目标价分布与风险曲线"]
+        current = self._to_float(info.get("close")) if info else None
+        if not current or current <= 0:
+            return lines + ["- 缺少当前价格，无法生成目标价分布。"]
+
+        valuation = self._target_price_estimate(info, peers)
+        base = valuation.get("base")
+        if not base or base <= 0:
+            return lines + ["- EPS/PB/PS 可用数据不足，无法用相对估值生成目标价。"]
+
+        risk_score = self._research_risk_score(info, peers, items)
+        bear = base * 0.78
+        bull = base * 1.32
+        stress = min(current * 0.65, bear)
+        narrative = max(current * 1.18, bull * 1.22)
+        grid = self._target_price_grid(stress, narrative, current, base, risk_score)
+        method_text = "；".join(valuation.get("methods", []))
+        implied_revenue = valuation.get("revenue")
+        net_margin = valuation.get("net_margin")
+
+        lines.extend(
+            [
+                f"- 方法：国际通用相对估值三法融合，EPS×PE、BVPS×PB、收入/股×PS，并按 ROE、净利率、同行估值分位做调整；不是 DCF 正式估值。",
+                f"- 关键假设：{method_text or '可用指标不足，权重已自动归一'}。",
+                f"- 隐含基本面：估算收入 {self._fmt_money(implied_revenue)}；估算净利率 {self._fmt_pct_ratio(net_margin)}；当前价 {current:.2f}。",
+                f"- 中性合理区间：悲观 {bear:.2f} / 中性 {base:.2f} / 乐观 {bull:.2f}。价格越高，兑现要求和风险率越高。",
+                "目标价-风险率分布：",
+            ]
+        )
+        for price, risk in grid:
+            bar = "█" * max(1, int(risk / 6))
+            lines.append(f"  {price:.2f} 元 | 风险率 {risk:02d}/100 | {bar}")
+        lines.append("- 解读：低风险价格不等于一定会跌到；高风险价格表示需要更强利润率、成长或情绪溢价才能支撑。")
+        return lines
+
+    def _target_price_estimate(self, info: dict[str, object], peers: list[dict[str, object]]) -> dict[str, object]:
+        current = self._to_float(info.get("close"))
+        pe = self._to_float(info.get("pe_ttm"))
+        pb = self._to_float(info.get("pb"))
+        ps = self._to_float(info.get("ps_ttm"))
+        eps = self._to_float(info.get("eps_ttm"))
+        bvps = self._to_float(info.get("bvps"))
+        roe = self._to_float(info.get("roe_ttm"))
+        market_cap = self._to_float(info.get("market_cap"))
+        shares = self._to_float(info.get("shares")) or self._to_float(info.get("total_share"))
+        if eps is None and current and pe and pe > 0:
+            eps = current / pe
+        if bvps is None and current and pb and pb > 0:
+            bvps = current / pb
+        revenue = market_cap / ps if market_cap and ps and ps > 0 else None
+        revenue_per_share = revenue / shares if revenue and shares else None
+        earnings = eps * shares if eps is not None and shares else None
+        net_margin = earnings / revenue if earnings is not None and revenue else None
+
+        peer_pe = self._peer_metric_average(peers, "pe_ttm", 5, 180)
+        peer_pb = self._peer_metric_average(peers, "pb", 0.3, 25)
+        peer_ps = self._peer_metric_average(peers, "ps_ttm", 0.2, 40)
+        quality_factor = 1 + self._clamp(((roe or 0.08) - 0.08) * 1.8, -0.25, 0.35)
+        margin_factor = 1 + self._clamp(((net_margin or 0.05) - 0.05) * 2.0, -0.22, 0.32)
+
+        estimates: list[tuple[str, float, float]] = []
+        if eps is not None and eps > 0 and peer_pe:
+            value = eps * min(180.0, peer_pe * quality_factor)
+            estimates.append(("EPS×调整PE", value, 0.45))
+        if bvps is not None and bvps > 0 and peer_pb:
+            value = bvps * min(25.0, peer_pb * quality_factor)
+            estimates.append(("BVPS×调整PB", value, 0.30))
+        if revenue_per_share and revenue_per_share > 0 and peer_ps:
+            value = revenue_per_share * min(40.0, peer_ps * margin_factor)
+            estimates.append(("收入/股×调整PS", value, 0.25))
+        if not estimates:
+            return {"base": None, "methods": [], "revenue": revenue, "net_margin": net_margin}
+        total_weight = sum(weight for _name, _value, weight in estimates)
+        base = sum(value * weight for _name, value, weight in estimates) / total_weight
+        methods = [f"{name}={value:.2f}" for name, value, _weight in estimates]
+        return {"base": base, "methods": methods, "revenue": revenue, "net_margin": net_margin}
+
+    def _peer_metric_average(self, peers: list[dict[str, object]], key: str, low: float, high: float) -> float | None:
+        values = [self._to_float(item.get(key)) for item in peers]
+        filtered = sorted(value for value in values if value is not None and low <= value <= high)
+        if not filtered:
+            return None
+        if len(filtered) >= 4:
+            filtered = filtered[1:-1]
+        return sum(filtered) / len(filtered)
+
+    def _target_price_grid(self, low: float, high: float, current: float, base: float, risk_score: int) -> list[tuple[float, int]]:
+        if high <= low:
+            high = low * 1.5
+        points = [low + (high - low) * index / 6 for index in range(7)]
+        if all(abs(point - current) / current > 0.04 for point in points):
+            points.append(current)
+        points = sorted({round(point, 2) for point in points if point > 0})
+        return [(point, self._target_price_risk(point, current, base, risk_score)) for point in points]
+
+    def _target_price_risk(self, price: float, current: float, base: float, risk_score: int) -> int:
+        upside = price / current - 1 if current else 0
+        valuation_premium = price / base - 1 if base else 0
+        downside_discount = max(0.0, current / price - 1) if price else 0.0
+        raw = risk_score * 0.36 + max(0.0, upside) * 85 + max(0.0, valuation_premium) * 42 - min(24.0, downside_discount * 45)
+        return int(round(self._clamp(raw, 0, 95)))
+
+    def _fmt_pct_ratio(self, value: object) -> str:
+        number = self._to_float(value)
+        if number is None:
+            return "-"
+        return f"{number * 100:.2f}%"
+
+    def _clamp(self, value: float, low: float, high: float) -> float:
+        return max(low, min(high, value))
+
     def _research_action_risk_section(
         self,
         symbol: str,
@@ -1027,7 +1371,7 @@ class MonitorApp:
             action = "可作为基本面观察池，但仍需结合流动性和行业周期。"
         risk_terms = self._top_keyword_hits(items, ("跌停", "减持", "质押", "问询", "处罚", "亏损", "下滑", "价格不确定", "竞争"))
         return [
-            "七、建议点与风险率",
+            "八、建议点与风险率",
             f"- 本地风险率：{risk_score}/100（{risk_level}）。该分数由估值溢价、PB、新闻风险词、短期异动共同估算。",
             f"- 操作建议点：{action}",
             f"- 重点风险：{risk_terms or '估值高、业绩兑现慢、行业景气波动、资金情绪退潮'}。",
@@ -1057,7 +1401,7 @@ class MonitorApp:
         return max(0, min(100, score))
 
     def _research_sources_section(self, items: list[dict[str, object]]) -> list[str]:
-        lines = ["八、信息源线索"]
+        lines = ["九、信息源线索"]
         for item in items[:8]:
             title = self._clean_text(str(item.get("title") or "无标题"), 80)
             source = item.get("source_site") or item.get("media_name") or item.get("_source") or "未知来源"
@@ -2164,6 +2508,9 @@ class MonitorApp:
                         pass
                 if hasattr(status_var, "set"):
                     status_var.set("搜索完成")
+            elif kind == "chart_result":
+                if isinstance(payload, dict):
+                    self._render_chart_payload(payload)
             elif kind == "stopped":
                 self.status_var.set("已停止")
                 self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["muted"])
