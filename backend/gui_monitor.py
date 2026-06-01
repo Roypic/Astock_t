@@ -85,9 +85,48 @@ STOCK_CODE_HINTS = {
 }
 RESEARCH_PEERS = {
     "002428.SZ": ("600497.SH", "000060.SZ", "600206.SH", "600362.SH"),
+    "603629.SH": ("002463.SZ", "600183.SH", "002916.SZ", "603228.SH", "002938.SZ"),
 }
 RESEARCH_THEMES = {
     "002428.SZ": ("锗", "红外光学", "光纤级锗", "光伏级锗", "磷化铟", "砷化镓", "化合物半导体"),
+    "603629.SH": ("PCB", "AI服务器", "算力", "云计算", "电子元器件", "服务器电源", "高多层板"),
+    "002384.SZ": ("PCB", "FPC", "AI服务器", "新能源车", "消费电子", "光模块"),
+    "603083.SH": ("CPO", "光模块", "光通信", "数据中心", "AI算力"),
+    "002222.SZ": ("激光晶体", "非线性晶体", "光通信", "光学元件", "半导体设备"),
+}
+GLOBAL_RESEARCH_PEERS = {
+    "002428.SZ": (
+        ("Teck Resources", "TECK", "全球锌/锗相关资源，锗为伴生战略小金属"),
+        ("Umicore", "UMI.BR", "全球材料回收与电子材料平台"),
+        ("5N Plus", "VNP.TO", "高纯材料、半导体和特种金属材料"),
+        ("AXT", "AXTI", "InP/GaAs 等化合物半导体衬底"),
+        ("Indium Corporation", "Private", "铟/镓/锗相关电子材料，非上市可比"),
+    ),
+    "603629.SH": (
+        ("TTM Technologies", "TTMI", "北美高端 PCB 与航空航天/数据中心板"),
+        ("Ibiden", "4062.T", "日本高端封装基板/PCB，AI服务器链条"),
+        ("Unimicron", "3037.TW", "台湾封装基板和高阶 PCB"),
+        ("Compeq", "2313.TW", "台湾 PCB，通信与消费电子"),
+        ("Kingboard", "0148.HK", "覆铜板/PCB 上游材料"),
+    ),
+    "002384.SZ": (
+        ("TTM Technologies", "TTMI", "全球高端 PCB"),
+        ("Unimicron", "3037.TW", "封装基板/高阶 PCB"),
+        ("Compeq", "2313.TW", "通信和消费电子 PCB"),
+        ("Ibiden", "4062.T", "高端封装基板"),
+    ),
+}
+TAM_FRAMEWORKS = {
+    "002428.SZ": (
+        "锗下游不是单一大市场，而是红外光学、光纤通信、太阳能电池、催化剂和化合物半导体等多终端叠加。",
+        "TAM 判断重点：全球锗供给相对刚性，若红外/卫星/光伏级锗/磷化铟需求共振，价格弹性通常大于销量弹性。",
+        "落地指标：锗价、出口政策、公司高附加值锗产品销量、InP/GaAs 衬底价格和产能利用率。",
+    ),
+    "603629.SH": (
+        "PCB 的 TAM 来自全球电子制造基座，AI服务器/交换机/高速互连把普通 PCB 需求推向高多层、高频高速、高可靠性。",
+        "TAM 判断重点：AI服务器出货、英伟达/ASIC 服务器平台迭代、800G/1.6T 交换机、服务器电源和散热结构升级。",
+        "落地指标：高多层板订单、AI服务器客户认证、服务器/通信占比、毛利率是否向高端 PCB 靠拢。",
+    ),
 }
 NEWS_THEME_TERMS = (
     "CPO",
@@ -740,7 +779,8 @@ class MonitorApp:
         code = self._resolve_stock_code(query)
         info = self._fetch_security_info(code) if code else {}
         name = str(info.get("symbol_name") or query)
-        themes = RESEARCH_THEMES.get(str(info.get("symbol") or code), self._query_terms(query) or (query,))
+        symbol = str(info.get("symbol") or code)
+        themes = self._research_themes_for(symbol, name, query)
         industry_ranked = self._collect_research_items(name, themes, now)
         peers = self._research_peers_for(code)
         peer_infos = [self._fetch_security_info(peer) for peer in peers]
@@ -755,13 +795,17 @@ class MonitorApp:
         ]
         lines.extend(self._research_snapshot(info))
         lines.append("")
-        lines.extend(self._research_market_size_section(themes, industry_ranked))
+        lines.extend(self._research_market_size_section(symbol, themes, industry_ranked))
         lines.append("")
-        lines.extend(self._research_company_status_section(name, industry_ranked))
+        lines.extend(self._research_company_status_section(symbol, name, themes, industry_ranked))
         lines.append("")
         lines.extend(self._research_peer_section(info, peer_infos))
         lines.append("")
-        lines.extend(self._research_expectation_section(name, info, industry_ranked, peer_infos))
+        lines.extend(self._research_global_peer_section(symbol))
+        lines.append("")
+        lines.extend(self._research_expectation_section(symbol, name, info, industry_ranked, peer_infos))
+        lines.append("")
+        lines.extend(self._research_action_risk_section(symbol, name, info, industry_ranked, peer_infos))
         lines.append("")
         lines.extend(self._research_sources_section(industry_ranked))
         lines.append("")
@@ -770,14 +814,16 @@ class MonitorApp:
 
     def _collect_research_items(self, name: str, themes: tuple[str, ...] | list[str], now: datetime) -> list[dict[str, object]]:
         start = now - timedelta(days=14)
+        core_theme = " ".join(themes[:4])
+        alt_theme = " ".join(themes[4:8])
         queries = [
             name,
-            f"{name} 锗 磷化铟 砷化镓",
+            f"{name} {core_theme}",
             f"{name} 东方财富 同花顺 研报",
             f"{name} 龙虎榜 资金 异动",
-            "锗 红外 光伏 光纤 半导体 市场规模",
-            "锗 出口管制 锗价 供需",
-            "磷化铟 砷化镓 化合物半导体 衬底",
+            f"{core_theme} 市场规模 行业空间",
+            f"{core_theme} 全球 同行 估值",
+            f"{alt_theme} 需求 供给 价格" if alt_theme else f"{core_theme} 需求 供给 价格",
         ]
         seen = set()
         candidates = []
@@ -805,17 +851,17 @@ class MonitorApp:
         score = 0.0
         if name and name in text:
             score += 7.0
-        core_terms = ("锗", "锗业", "磷化铟", "砷化镓", "化合物半导体", "光伏级锗", "红外级锗", "光纤级锗")
+        core_terms = tuple(dict.fromkeys([str(word) for word in themes] + ["市场规模", "行业空间", "全球", "同行", "估值"]))
         for word in core_terms:
             if word in text:
                 score += 2.0
             if word in title:
                 score += 1.2
         for word in themes:
-            if word in ("红外光学", "光学", "光伏级锗", "光纤级锗", "磷化铟", "砷化镓", "化合物半导体") and word in text:
+            if word in text:
                 score += 0.8
         irrelevant_terms = ("眼镜", "脱毛", "汽车皮革", "量子光学", "激光相互作用", "光学科技")
-        if any(word in text for word in irrelevant_terms) and name not in text and "锗" not in text:
+        if any(word in text for word in irrelevant_terms) and name not in text and not any(word in text for word in themes[:4]):
             score -= 5.0
         return score
 
@@ -841,6 +887,15 @@ class MonitorApp:
             return RESEARCH_PEERS[code]
         return tuple(symbol for symbol in ("600497.SH", "000060.SZ", "600206.SH") if symbol != code)
 
+    def _research_themes_for(self, symbol: str, name: str, query: str) -> tuple[str, ...]:
+        if symbol in RESEARCH_THEMES:
+            return RESEARCH_THEMES[symbol]
+        profile = self._news_profile_for_query(name) or self._news_profile_for_query(query)
+        if profile:
+            return tuple(profile.get("theme", ())) or tuple(self._query_terms(query))
+        terms = tuple(self._query_terms(query))
+        return terms or (name,)
+
     def _research_snapshot(self, info: dict[str, object]) -> list[str]:
         if not info:
             return ["一、行情估值快照", "- 未获取到行情估值数据。"]
@@ -851,25 +906,37 @@ class MonitorApp:
             f"- PE(TTM)：{self._fmt_num(info.get('pe_ttm'))}；PB：{self._fmt_num(info.get('pb'))}；每股净资产：{self._fmt_num(info.get('bvps'))}。",
         ]
 
-    def _research_market_size_section(self, themes: tuple[str, ...] | list[str], items: list[dict[str, object]]) -> list[str]:
+    def _research_market_size_section(self, symbol: str, themes: tuple[str, ...] | list[str], items: list[dict[str, object]]) -> list[str]:
         theme_text = "、".join(themes[:7])
         market_terms = self._top_keyword_hits(items, ("市场规模", "需求", "供给", "出口管制", "红外", "光纤", "光伏", "半导体", "军工", "卫星", "AI", "涨价"))
-        return [
+        lines = [
             "二、市场规模与行业位置",
             f"- 主题链条：{theme_text or '稀散金属/半导体材料'}。",
             f"- 小 AI 摘要：近期信息主要围绕 {market_terms or '锗价、红外光学、光纤通信、光伏衬底及化合物半导体'} 展开。",
-            "- 研究判断：锗不是大众金属，核心看供给约束和高端应用放量；市场空间绝对值不如铜铝锂，但价格弹性和战略属性更强。",
         ]
+        framework = TAM_FRAMEWORKS.get(symbol)
+        if framework:
+            lines.extend(f"- {item}" for item in framework)
+        else:
+            lines.append("- TAM 判断：先看终端需求是否扩张，再看公司产品是否切入高价值环节，最后看估值是否已提前透支。")
+        return lines
 
-    def _research_company_status_section(self, name: str, items: list[dict[str, object]]) -> list[str]:
+    def _research_company_status_section(self, symbol: str, name: str, themes: tuple[str, ...] | list[str], items: list[dict[str, object]]) -> list[str]:
         positive = self._top_keyword_hits(items, ("合作", "扩产", "产能", "增长", "订单", "项目", "磷化铟", "砷化镓", "光伏级", "红外级"))
         risk = self._top_keyword_hits(items, ("亏损", "下滑", "减持", "质押", "问询", "处罚", "现金流", "毛利率"))
+        if symbol == "603629.SH":
+            main_line = "PCB制造 + AI服务器/算力链条 + 服务器电源相关业务弹性"
+            positive = positive or self._top_keyword_hits(items, ("AI服务器", "算力", "PCB", "电源", "订单", "增长", "高多层"))
+        elif symbol == "002428.SZ":
+            main_line = "锗资源 + 锗材料深加工 + 化合物半导体延伸"
+        else:
+            main_line = "、".join(themes[:4]) or "主营业务景气和公司份额变化"
         return [
             "三、公司现状",
-            f"- 主线：{name} 的稀缺性来自锗资源 + 锗材料深加工 + 化合物半导体延伸。",
+            f"- 主线：{name} 的研究主线来自 {main_line}。",
             f"- 积极线索：{positive or '高端材料、光伏级/红外级产品、化合物半导体项目'}。",
             f"- 风险线索：{risk or '盈利波动、产品价格周期、项目放量节奏、估值较高'}。",
-            "- 差异点：相比资源型有色公司，云南锗业更像“小金属资源 + 材料平台”标的，业绩弹性取决于高附加值产品占比，而不是单纯金属采选量。",
+            f"- 差异点：{name} 的关键不只是所在行业景气，而是能否在高价值产品/高端客户/产能兑现上形成可验证差异。",
         ]
 
     def _research_peer_section(self, info: dict[str, object], peers: list[dict[str, object]]) -> list[str]:
@@ -884,11 +951,25 @@ class MonitorApp:
                 f"{name}({symbol}) | {positioning} | {self._fmt_money(item.get('market_cap'))} | "
                 f"{self._fmt_num(item.get('pe_ttm'))} | {self._fmt_num(item.get('pb'))}"
             )
-        lines.append("- 估值解释：若云南锗业 PE 显著高于同行，市场通常在定价资源稀缺性、锗价弹性和化合物半导体成长性；但这也意味着业绩兑现要求更高。")
+        target_name = str(info.get("symbol_name") or "目标公司") if info else "目标公司"
+        lines.append(f"- 估值解释：若 {target_name} PE/PB 显著高于同行，市场通常在定价更高成长性、稀缺性或资金情绪；但这也意味着业绩兑现要求更高。")
+        return lines
+
+    def _research_global_peer_section(self, symbol: str) -> list[str]:
+        peers = GLOBAL_RESEARCH_PEERS.get(symbol)
+        lines = ["五、全球同行与产业坐标"]
+        if not peers:
+            lines.append("- 暂无内置全球同行池；建议补充海外龙头、上游材料商、下游客户链条后再做全球估值横比。")
+            return lines
+        lines.append("公司 | 代码 | 对标逻辑")
+        for name, ticker, logic in peers:
+            lines.append(f"{name} | {ticker} | {logic}")
+        lines.append("- 使用方式：全球同行不一定同业务同利润率，更多用于判断产业链位置、估值天花板和资金偏好，不能简单套 PE。")
         return lines
 
     def _research_expectation_section(
         self,
+        symbol: str,
         name: str,
         info: dict[str, object],
         items: list[dict[str, object]],
@@ -901,17 +982,82 @@ class MonitorApp:
         valuation_note = "估值缺少可比样本"
         if pe and peer_avg:
             valuation_note = "明显高于同行均值" if pe > peer_avg * 2 else "接近或略高于同行均值" if pe > peer_avg else "低于同行均值"
-        catalysts = self._top_keyword_hits(items, ("出口管制", "涨价", "红外", "卫星", "光伏", "磷化铟", "砷化镓", "半导体", "项目", "产能"))
+        if symbol == "603629.SH":
+            catalyst_words = ("AI服务器", "算力", "PCB", "电源", "高多层", "订单", "客户认证", "毛利率", "产能")
+            fallback_catalysts = "AI服务器订单、高多层 PCB 认证、服务器电源相关业务放量、毛利率改善"
+            key_observation = "1）AI服务器/算力链订单；2）高多层板和服务器电源客户认证；3）毛利率是否向高端产品靠拢；4）PCB全球同行估值是否同步抬升。"
+        else:
+            catalyst_words = ("出口管制", "涨价", "红外", "卫星", "光伏", "磷化铟", "砷化镓", "半导体", "项目", "产能")
+            fallback_catalysts = "锗价上涨、高端产品放量、磷化铟/砷化镓项目兑现、红外/卫星/光伏需求"
+            key_observation = "1）锗价和出口政策；2）红外级/光伏级/光纤级产品销量与毛利；3）化合物半导体产能利用率；4）同行估值是否同步抬升。"
+        catalysts = self._top_keyword_hits(items, catalyst_words)
+        scenarios = self._research_scenarios(symbol, valuation_note)
         return [
-            "五、预期与跟踪框架",
+            "六、预期与跟踪框架",
             f"- 估值状态：{name} 当前 {valuation_note}；如果利润基数较低，PE 会被放大，需更多看 PB、市值/资源量、项目兑现。",
-            f"- 上行催化：{catalysts or '锗价上涨、高端产品放量、磷化铟/砷化镓项目兑现、红外/卫星/光伏需求'}。",
-            "- 关键观察：1）锗价和出口政策；2）红外级/光伏级/光纤级产品销量与毛利；3）化合物半导体产能利用率；4）同行估值是否同步抬升。",
-            "- 初步结论：适合作为“小金属战略资源 + 化合物半导体材料”弹性标的观察；若只按当前利润静态估值，安全垫不足，需用产业趋势和业绩兑现共同验证。",
+            f"- 上行催化：{catalysts or fallback_catalysts}。",
+            f"- 关键观察：{key_observation}",
+            f"- 情景推演：{scenarios}",
         ]
 
+    def _research_scenarios(self, symbol: str, valuation_note: str) -> str:
+        if symbol == "603629.SH":
+            return "乐观：AI服务器订单和高多层板认证兑现，毛利率上修；中性：传统电子+服务器业务温和改善；悲观：AI链条订单低于预期且价格竞争压低利润。"
+        if symbol == "002428.SZ":
+            return "乐观：锗价强势+InP/GaAs 放量，利润弹性兑现；中性：锗价高位震荡、项目逐步爬坡；悲观：产品价格回落或项目爬坡慢，高估值承压。"
+        return f"乐观：行业景气和公司份额共振；中性：估值跟随基本面缓慢消化；悲观：{valuation_note} 且业绩兑现不及预期。"
+
+    def _research_action_risk_section(
+        self,
+        symbol: str,
+        name: str,
+        info: dict[str, object],
+        items: list[dict[str, object]],
+        peers: list[dict[str, object]],
+    ) -> list[str]:
+        risk_score = self._research_risk_score(info, peers, items)
+        if risk_score >= 70:
+            risk_level = "高"
+            action = "只适合观察或轻仓事件驱动，等待估值/回撤/业绩兑现出现更好赔率。"
+        elif risk_score >= 45:
+            risk_level = "中"
+            action = "适合分批跟踪，重点看催化是否兑现，避免追高一次性重仓。"
+        else:
+            risk_level = "较低"
+            action = "可作为基本面观察池，但仍需结合流动性和行业周期。"
+        risk_terms = self._top_keyword_hits(items, ("跌停", "减持", "质押", "问询", "处罚", "亏损", "下滑", "价格不确定", "竞争"))
+        return [
+            "七、建议点与风险率",
+            f"- 本地风险率：{risk_score}/100（{risk_level}）。该分数由估值溢价、PB、新闻风险词、短期异动共同估算。",
+            f"- 操作建议点：{action}",
+            f"- 重点风险：{risk_terms or '估值高、业绩兑现慢、行业景气波动、资金情绪退潮'}。",
+            f"- 验证清单：若后续 1）订单/价格/产能数据改善，2）同行估值同步上移，3）公司利润率改善，则 {name} 的高估值更容易被消化；反之应降低预期。",
+        ]
+
+    def _research_risk_score(self, info: dict[str, object], peers: list[dict[str, object]], items: list[dict[str, object]]) -> int:
+        score = 25
+        pe = self._to_float(info.get("pe_ttm")) if info else None
+        pb = self._to_float(info.get("pb")) if info else None
+        peer_pes = [self._to_float(item.get("pe_ttm")) for item in peers]
+        peer_pes = [value for value in peer_pes if value and value > 0]
+        peer_avg = sum(peer_pes) / len(peer_pes) if peer_pes else None
+        if pe and peer_avg and pe > peer_avg * 2:
+            score += 25
+        elif pe and pe > 80:
+            score += 15
+        if pb and pb > 10:
+            score += 20
+        elif pb and pb > 5:
+            score += 10
+        negative_hits = sum(1 for item in items if self._negative_news_severity(item) >= 5)
+        score += min(20, negative_hits * 5)
+        hot_terms = ("龙虎榜", "异动", "跌停", "涨停", "成交额", "主力资金")
+        hot_hits = sum(1 for item in items if any(word in self._news_body_text(item) for word in hot_terms))
+        score += min(15, hot_hits * 3)
+        return max(0, min(100, score))
+
     def _research_sources_section(self, items: list[dict[str, object]]) -> list[str]:
-        lines = ["六、信息源线索"]
+        lines = ["八、信息源线索"]
         for item in items[:8]:
             title = self._clean_text(str(item.get("title") or "无标题"), 80)
             source = item.get("source_site") or item.get("media_name") or item.get("_source") or "未知来源"
@@ -928,6 +1074,12 @@ class MonitorApp:
             "000060.SZ": "铅锌铜综合资源",
             "600206.SH": "稀有金属/电子材料",
             "600362.SH": "铜冶炼/伴生资源",
+            "603629.SH": "PCB/算力租赁/服务器电源相关",
+            "002463.SZ": "高端 PCB/服务器与通信板",
+            "600183.SH": "覆铜板/电子材料龙头",
+            "002916.SZ": "封装基板/通信 PCB",
+            "603228.SH": "PCB制造/汽车与服务器链",
+            "002938.SZ": "消费电子/FPC/高端 PCB",
         }
         return mapping.get(symbol, "有色/材料可比")
 
