@@ -12,7 +12,15 @@ permissions:
 
 jobs:
   build:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-13
+            arch: x64
+          - runner: macos-14
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - name: Checkout
@@ -55,30 +63,64 @@ jobs:
           --clean
           gui_monitor.py
 
-      - name: Package app
+      - name: Package app with terminal launcher
         working-directory: backend/dist
+        shell: bash
         run: |
-          ditto -c -k --sequesterRsrc --keepParent AShareTSignalMonitor.app AShareTSignalMonitor-macOS.zip
-          ditto -c -k --sequesterRsrc --keepParent AShareTSignalMonitor-cli AShareTSignalMonitor-macOS-cli.zip
+          mkdir -p "AShareTSignalMonitor-macOS-${{ matrix.arch }}"
+          cp -R AShareTSignalMonitor.app "AShareTSignalMonitor-macOS-${{ matrix.arch }}/"
+          cp AShareTSignalMonitor-cli "AShareTSignalMonitor-macOS-${{ matrix.arch }}/"
+          cat > "AShareTSignalMonitor-macOS-${{ matrix.arch }}/RUN_FROM_TERMINAL.command" <<'SH'
+          #!/bin/bash
+          set -o pipefail
+          DIR="$(cd "$(dirname "$0")" && pwd)"
+          LOG_DIR="$HOME/Library/Application Support/AShareTSignalMonitor"
+          mkdir -p "$LOG_DIR"
+          LOG_FILE="$LOG_DIR/terminal_run.log"
+          echo "Starting AShareTSignalMonitor at $(date)" | tee "$LOG_FILE"
+          "$DIR/AShareTSignalMonitor.app/Contents/MacOS/AShareTSignalMonitor" 2>&1 | tee -a "$LOG_FILE"
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "Exit code: $EXIT_CODE" | tee -a "$LOG_FILE"
+          echo "Log written to: $LOG_FILE"
+          read -r -p "Press Enter to close this window..."
+          exit "$EXIT_CODE"
+          SH
+          chmod +x "AShareTSignalMonitor-macOS-${{ matrix.arch }}/RUN_FROM_TERMINAL.command"
+          cat > "AShareTSignalMonitor-macOS-${{ matrix.arch }}/START_HERE.txt" <<'TXT'
+          1. First try opening AShareTSignalMonitor.app.
+          2. If macOS blocks it, run:
+             xattr -dr com.apple.quarantine AShareTSignalMonitor.app
+          3. If it flashes and closes, run RUN_FROM_TERMINAL.command and send terminal_run.log.
+          4. Startup crash log path:
+             ~/Library/Application Support/AShareTSignalMonitor/startup_error.log
+          TXT
+          ditto -c -k --sequesterRsrc --keepParent "AShareTSignalMonitor-macOS-${{ matrix.arch }}" "AShareTSignalMonitor-macOS-${{ matrix.arch }}.zip"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AShareTSignalMonitor-macOS
-          path: |
-            backend/dist/AShareTSignalMonitor-macOS.zip
-            backend/dist/AShareTSignalMonitor-macOS-cli.zip
+          name: AShareTSignalMonitor-macOS-${{ matrix.arch }}
+          path: backend/dist/AShareTSignalMonitor-macOS-${{ matrix.arch }}.zip
           if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Publish macOS Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: macos-latest
           name: macOS Latest
-          body: "Latest unsigned macOS GUI build of AShareTSignalMonitor.app. Commit: ${{ github.sha }}"
-          files: |
-            backend/dist/AShareTSignalMonitor-macOS.zip
-            backend/dist/AShareTSignalMonitor-macOS-cli.zip
+          body: "Latest unsigned macOS GUI builds of AShareTSignalMonitor.app. Commit: ${{ github.sha }}"
+          files: dist/AShareTSignalMonitor-macOS-*.zip
           make_latest: false
           prerelease: false
           fail_on_unmatched_files: true
