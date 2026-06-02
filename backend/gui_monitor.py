@@ -25,7 +25,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, Security, TModel, load_models
-from notifier import PushPlusNotifier
+from notifier import CowAgentNotifier, MultiNotifier, PushPlusNotifier
 from net_utils import safe_urlopen
 
 try:
@@ -428,6 +428,7 @@ class MonitorApp:
         self.mascot_idle_step = 0
 
         self.token_var = tk.StringVar()
+        self.cowagent_endpoint_var = tk.StringVar()
         self.model_path_var = tk.StringVar(value=str(self.models_dir))
         self.interval_var = tk.StringVar(value=str(DEFAULT_INTERVAL_SECONDS))
         self.news_watchlist_var = tk.StringVar(value="剑桥科技，东山精密，福晶科技，利通电子")
@@ -504,8 +505,11 @@ class MonitorApp:
         ttk.Label(form, text="间隔秒", style="Muted.TLabel").grid(row=2, column=2, sticky=tk.E, padx=4, pady=7)
         ttk.Entry(form, textvariable=self.interval_var, width=8).grid(row=2, column=3, sticky=tk.W, padx=(8, 0), pady=7)
 
-        ttk.Label(form, text="自选监控池", style="Muted.TLabel").grid(row=3, column=0, sticky=tk.W, padx=(0, 12), pady=7)
-        ttk.Entry(form, textvariable=self.news_watchlist_var).grid(row=3, column=1, columnspan=3, sticky=tk.EW, padx=(0, 0), pady=7)
+        ttk.Label(form, text="CowAgent", style="Muted.TLabel").grid(row=3, column=0, sticky=tk.W, padx=(0, 12), pady=7)
+        ttk.Entry(form, textvariable=self.cowagent_endpoint_var).grid(row=3, column=1, columnspan=3, sticky=tk.EW, padx=(0, 0), pady=7)
+
+        ttk.Label(form, text="自选监控池", style="Muted.TLabel").grid(row=4, column=0, sticky=tk.W, padx=(0, 12), pady=7)
+        ttk.Entry(form, textvariable=self.news_watchlist_var).grid(row=4, column=1, columnspan=3, sticky=tk.EW, padx=(0, 0), pady=7)
 
         self.risk_label = tk.Label(
             form,
@@ -519,16 +523,17 @@ class MonitorApp:
             wraplength=850,
             font=("Microsoft YaHei UI", 9),
         )
-        self.risk_label.grid(row=4, column=0, columnspan=4, sticky=tk.EW, pady=(8, 0))
+        self.risk_label.grid(row=5, column=0, columnspan=4, sticky=tk.EW, pady=(8, 0))
 
         help_frame = ttk.Frame(form, style="Soft.TFrame", padding=12)
-        help_frame.grid(row=5, column=0, columnspan=4, sticky=tk.EW, pady=(10, 0))
+        help_frame.grid(row=6, column=0, columnspan=4, sticky=tk.EW, pady=(10, 0))
         help_frame.columnconfigure(0, weight=1)
         help_text = (
             "PushPlus 使用：1. 打开 PushPlus 官网并用微信扫码登录；"
             "2. 在「一对一推送」页面复制 token；"
             "3. 粘贴到上方 token 输入框；"
-            "4. 点「测试推送」，手机微信收到测试消息后再点「开始监控」。"
+            "4. CowAgent 可填 webhook URL，或填 outbox 写入本地队列；"
+            "5. 点「测试推送」，手机微信收到测试消息后再点「开始监控」。"
         )
         tk.Label(
             help_frame,
@@ -744,15 +749,19 @@ class MonitorApp:
 
     def _test_push(self) -> None:
         token = self.token_var.get().strip()
-        if not token:
-            messagebox.showwarning("缺少 token", "请先输入 PushPlus token。")
+        cowagent_endpoint = self.cowagent_endpoint_var.get().strip()
+        if not token and not cowagent_endpoint:
+            messagebox.showwarning("缺少推送配置", "请先输入 PushPlus token，或填写 CowAgent webhook/outbox。")
             return
         try:
-            PushPlusNotifier(token).send_text("做T提醒测试：GUI 监控程序已接通。", title="做T提醒测试")
-            self._log("PushPlus 测试消息已发送")
+            self._build_alert_notifier(token, cowagent_endpoint).send_text("做T提醒测试：GUI 监控程序已接通。", title="做T提醒测试")
+            self._log("测试消息已发送")
             messagebox.showinfo("成功", "测试消息已发送。")
         except Exception as exc:
             messagebox.showerror("推送失败", str(exc))
+
+    def _build_alert_notifier(self, token: str, cowagent_endpoint: str = "") -> MultiNotifier:
+        return MultiNotifier([PushPlusNotifier(token), CowAgentNotifier(cowagent_endpoint)])
 
     def _show_premarket_analysis(self) -> None:
         model_path = Path(self.model_path_var.get().strip())
@@ -2413,9 +2422,10 @@ class MonitorApp:
             return
 
         token = self.token_var.get().strip()
+        cowagent_endpoint = self.cowagent_endpoint_var.get().strip()
         model_path = Path(self.model_path_var.get().strip())
-        if not token:
-            messagebox.showwarning("缺少 token", "请先输入 PushPlus token。")
+        if not token and not cowagent_endpoint:
+            messagebox.showwarning("缺少推送配置", "请先输入 PushPlus token，或填写 CowAgent webhook/outbox。")
             return
         if not model_path.exists():
             messagebox.showwarning("模型不存在", "请选择模型 JSON 文件或模型文件夹。")
@@ -2429,7 +2439,7 @@ class MonitorApp:
         self.stop_event.clear()
         self.worker = threading.Thread(
             target=self._run_worker,
-            args=(model_path, token, interval),
+            args=(model_path, token, cowagent_endpoint, interval),
             daemon=True,
         )
         self.worker.start()
@@ -2439,7 +2449,7 @@ class MonitorApp:
             self.news_monitor_started_at = datetime.now(BEIJING_TZ)
             self.news_worker = threading.Thread(
                 target=self._run_intraday_news_worker,
-                args=(token,),
+                args=(token, cowagent_endpoint),
                 daemon=True,
             )
             self.news_worker.start()
@@ -2448,7 +2458,7 @@ class MonitorApp:
             self.market_alert_states.clear()
             self.market_worker = threading.Thread(
                 target=self._run_market_weak_worker,
-                args=(model_path, token),
+                args=(model_path, token, cowagent_endpoint),
                 daemon=True,
             )
             self.market_worker.start()
@@ -2469,12 +2479,12 @@ class MonitorApp:
         self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["coral_dark"])
         self._log("正在停止监控")
 
-    def _run_worker(self, model_path: Path, token: str, interval: int) -> None:
+    def _run_worker(self, model_path: Path, token: str, cowagent_endpoint: str, interval: int) -> None:
         try:
             models = load_models(model_path)
             self.queue.put(("log", f"已加载 {len(models)} 个模型：" + "、".join(m.name for m in models)))
             self.queue.put(("risk", self._model_risk_summary(model_path)))
-            engine = ModelSignalEngine(models, app_dir() / "data", token)
+            engine = ModelSignalEngine(models, app_dir() / "data", token, cowagent_endpoint)
         except Exception as exc:
             self.queue.put(("error", str(exc)))
             return
@@ -2488,8 +2498,8 @@ class MonitorApp:
             self.stop_event.wait(interval)
         self.queue.put(("stopped", None))
 
-    def _run_intraday_news_worker(self, token: str) -> None:
-        notifier = PushPlusNotifier(token)
+    def _run_intraday_news_worker(self, token: str, cowagent_endpoint: str) -> None:
+        notifier = self._build_alert_notifier(token, cowagent_endpoint)
         self.queue.put(("log", f"盘中小作文雷达已启动：每 {INTRADAY_NEWS_INTERVAL_SECONDS} 秒检查一次自选股"))
         while not self.stop_event.is_set():
             if not self._is_live_trading_now():
@@ -3124,7 +3134,7 @@ class MonitorApp:
             "summary": f"{name} 热度{rumor_heat} 杀伤{impact} 可信{credibility}",
         }
 
-    def _run_market_weak_worker(self, model_path: Path, token: str) -> None:
+    def _run_market_weak_worker(self, model_path: Path, token: str, cowagent_endpoint: str) -> None:
         try:
             models = load_models(model_path)
             client = MarketClient(ttl_seconds=60)
@@ -3132,7 +3142,7 @@ class MonitorApp:
             self.queue.put(("log", f"大盘/板块走弱提醒启动失败：{exc}"))
             return
 
-        notifier = PushPlusNotifier(token)
+        notifier = self._build_alert_notifier(token, cowagent_endpoint)
         self.queue.put(("log", f"大盘/板块走弱提醒已启动：每 {MARKET_WEAK_INTERVAL_SECONDS // 60} 分钟检查一次"))
         while not self.stop_event.is_set():
             if not self._is_live_trading_now():
