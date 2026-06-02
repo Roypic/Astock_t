@@ -27,8 +27,11 @@ from tkinter import filedialog, messagebox, ttk
 
 from cowagent_outbox_bridge import CowAgentOutboxBridge, load_weixin_targets
 from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, Security, TModel, load_models
-from notifier import CowAgentNotifier, MultiNotifier, PushPlusNotifier
+from notifier import CowAgentNotifier, MultiNotifier, PushPlusNotifier, WeixinPushNotifier
 from net_utils import safe_urlopen
+from weixin_push import default_credentials_path as weixin_credentials_path
+from weixin_push import load_targets as load_weixin_push_targets
+from weixin_push import login_with_qr, refresh_context_tokens
 
 try:
     from build_info import BUILD_SHA
@@ -419,6 +422,8 @@ class MonitorApp:
         self.market_worker: threading.Thread | None = None
         self.cowagent_bridge_stop = threading.Event()
         self.cowagent_bridge_worker: threading.Thread | None = None
+        self.weixin_session_stop = threading.Event()
+        self.weixin_session_worker: threading.Thread | None = None
         self.seen_intraday_news: set[str] = set()
         self.seen_rumor_events: dict[str, dict[str, object]] = {}
         self.seen_market_alerts: set[str] = set()
@@ -539,7 +544,7 @@ class MonitorApp:
             "PushPlus 使用：1. 打开 PushPlus 官网并用微信扫码登录；"
             "2. 在「一对一推送」页面复制 token；"
             "3. 粘贴到上方 token 输入框；"
-            "4. CowAgent 填 outbox，并点击「启动桥接」把本地队列转到 CowAgent 微信；"
+            "4. 微信直推填 weixin，点击「微信登录」扫码，再在微信里给 bot 发一句话；"
             "5. 点「测试推送」，手机微信收到测试消息后再点「开始监控」。"
         )
         tk.Label(
@@ -557,7 +562,7 @@ class MonitorApp:
         cow_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0))
         tk.Label(
             cow_frame,
-            text="CowAgent：安装后在控制台接入微信，并先给 CowAgent 发一句话；本软件填 outbox 后由桥接器转发。",
+            text="微信/CowAgent：推荐填 weixin 走内置微信直推；旧版 CowAgent outbox 仍可用。",
             bg=COLORS["card_soft"],
             fg=COLORS["muted"],
             justify=tk.LEFT,
@@ -569,6 +574,8 @@ class MonitorApp:
         ttk.Button(cow_frame, text="控制台", style="Ghost.TButton", command=self._open_cowagent_console).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(cow_frame, text="状态", style="Ghost.TButton", command=self._show_cowagent_status).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(cow_frame, text="启动桥接", style="Ghost.TButton", command=self._start_cowagent_bridge).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(cow_frame, text="微信登录", style="Ghost.TButton", command=self._start_weixin_login).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(cow_frame, text="刷新会话", style="Ghost.TButton", command=self._start_weixin_session).pack(side=tk.LEFT, padx=(8, 0))
 
         controls = ttk.Frame(outer)
         controls.pack(fill=tk.X, pady=(0, 12))
@@ -784,6 +791,40 @@ class MonitorApp:
         bridge = CowAgentOutboxBridge(logger=lambda msg: self.queue.put(("log", msg)))
         bridge.run_forever(stop=self.cowagent_bridge_stop.is_set)
 
+    def _start_weixin_login(self) -> None:
+        if self.weixin_session_worker and self.weixin_session_worker.is_alive():
+            self._log("微信会话刷新已经在运行")
+        self.cowagent_endpoint_var.set("weixin")
+        self.weixin_session_stop.clear()
+        threading.Thread(target=self._run_weixin_login, daemon=True).start()
+
+    def _run_weixin_login(self) -> None:
+        try:
+            login_with_qr(logger=lambda msg: self.queue.put(("log", msg)), stop=self.weixin_session_stop.is_set)
+            self.queue.put(("log", "微信扫码登录完成。请在微信里给这个 bot 发一句话，然后点「刷新会话」。"))
+            self._ensure_weixin_session_worker()
+        except Exception as exc:
+            self.queue.put(("error", f"微信登录失败：{exc}"))
+
+    def _start_weixin_session(self) -> None:
+        try:
+            load_weixin_push_targets()
+            messagebox.showinfo("微信会话已就绪", f"已找到可推送会话。凭证：{weixin_credentials_path()}")
+        except Exception as exc:
+            self._log(f"微信会话还未就绪：{exc}")
+        self._ensure_weixin_session_worker()
+
+    def _ensure_weixin_session_worker(self) -> None:
+        if self.weixin_session_worker and self.weixin_session_worker.is_alive():
+            return
+        self.weixin_session_stop.clear()
+        self.weixin_session_worker = threading.Thread(target=self._run_weixin_session_worker, daemon=True)
+        self.weixin_session_worker.start()
+        self._log("微信会话刷新已启动。请在微信里给这个 bot 发一句话。")
+
+    def _run_weixin_session_worker(self) -> None:
+        refresh_context_tokens(logger=lambda msg: self.queue.put(("log", msg)), stop=self.weixin_session_stop.is_set)
+
     def _run_cowagent_status(self) -> None:
         try:
             result = subprocess.run(
@@ -923,7 +964,7 @@ class MonitorApp:
             messagebox.showerror("推送失败", str(exc))
 
     def _build_alert_notifier(self, token: str, cowagent_endpoint: str = "") -> MultiNotifier:
-        return MultiNotifier([PushPlusNotifier(token), CowAgentNotifier(cowagent_endpoint)])
+        return MultiNotifier([PushPlusNotifier(token), WeixinPushNotifier(cowagent_endpoint), CowAgentNotifier(cowagent_endpoint)])
 
     def _show_premarket_analysis(self) -> None:
         model_path = Path(self.model_path_var.get().strip())
@@ -2600,6 +2641,8 @@ class MonitorApp:
 
         if cowagent_endpoint.lower() in ("outbox", "file", "local"):
             self._start_cowagent_bridge()
+        if cowagent_endpoint.lower() in ("weixin", "wechat", "wx", "builtin"):
+            self._ensure_weixin_session_worker()
         self.stop_event.clear()
         self.worker = threading.Thread(
             target=self._run_worker,
@@ -2639,6 +2682,7 @@ class MonitorApp:
     def _stop(self) -> None:
         self.stop_event.set()
         self.cowagent_bridge_stop.set()
+        self.weixin_session_stop.set()
         self.news_monitor_started_at = None
         self.status_var.set("停止中")
         self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["coral_dark"])

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from net_utils import safe_urlopen
+from weixin_push import send_text_to_all
 
 
 def format_signal(signal: dict[str, Any]) -> str:
@@ -106,7 +107,7 @@ class CowAgentNotifier:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.endpoint)
+        return bool(self.endpoint) and self.endpoint.lower() not in ("weixin", "wechat", "wx", "builtin")
 
     def send_text(self, content: str, title: str = "A股提醒") -> None:
         if not self.enabled:
@@ -150,6 +151,23 @@ class CowAgentNotifier:
         return path
 
 
+class WeixinPushNotifier:
+    def __init__(self, mode: str | None = None) -> None:
+        self.mode = (mode or os.environ.get("ASHARE_WEIXIN_PUSH", "")).strip().lower()
+
+    @property
+    def enabled(self) -> bool:
+        return self.mode in ("weixin", "wechat", "wx", "builtin")
+
+    def send_text(self, content: str, title: str = "A股提醒") -> None:
+        if not self.enabled:
+            return
+        send_text_to_all(content, title=title)
+
+    def send_signal(self, signal: dict[str, Any]) -> None:
+        self.send_text(format_signal(signal), title=f"做T信号：{signal['symbol']}")
+
+
 class MultiNotifier:
     def __init__(self, notifiers: list[Any]) -> None:
         self.notifiers = notifiers
@@ -191,6 +209,7 @@ def build_notifier() -> MultiNotifier:
     return MultiNotifier(
         [
             PushPlusNotifier(),
+            WeixinPushNotifier(),
             CowAgentNotifier(),
             WeComNotifier(),
         ]
