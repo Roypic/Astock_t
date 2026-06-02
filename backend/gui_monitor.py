@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from cowagent_outbox_bridge import CowAgentOutboxBridge, load_weixin_targets
 from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, Security, TModel, load_models
 from notifier import CowAgentNotifier, MultiNotifier, PushPlusNotifier
 from net_utils import safe_urlopen
@@ -416,6 +417,8 @@ class MonitorApp:
         self.worker: threading.Thread | None = None
         self.news_worker: threading.Thread | None = None
         self.market_worker: threading.Thread | None = None
+        self.cowagent_bridge_stop = threading.Event()
+        self.cowagent_bridge_worker: threading.Thread | None = None
         self.seen_intraday_news: set[str] = set()
         self.seen_rumor_events: dict[str, dict[str, object]] = {}
         self.seen_market_alerts: set[str] = set()
@@ -536,7 +539,7 @@ class MonitorApp:
             "PushPlus 使用：1. 打开 PushPlus 官网并用微信扫码登录；"
             "2. 在「一对一推送」页面复制 token；"
             "3. 粘贴到上方 token 输入框；"
-            "4. CowAgent 可填 webhook URL，或填 outbox 写入本地队列；"
+            "4. CowAgent 填 outbox，并点击「启动桥接」把本地队列转到 CowAgent 微信；"
             "5. 点「测试推送」，手机微信收到测试消息后再点「开始监控」。"
         )
         tk.Label(
@@ -554,7 +557,7 @@ class MonitorApp:
         cow_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0))
         tk.Label(
             cow_frame,
-            text="CowAgent：安装后打开控制台，在 Channels 里接入微信；CowAgent 输入框可填 outbox 写入本地队列。",
+            text="CowAgent：安装后在控制台接入微信，并先给 CowAgent 发一句话；本软件填 outbox 后由桥接器转发。",
             bg=COLORS["card_soft"],
             fg=COLORS["muted"],
             justify=tk.LEFT,
@@ -565,6 +568,7 @@ class MonitorApp:
         ttk.Button(cow_frame, text="启动", style="Ghost.TButton", command=self._start_cowagent).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(cow_frame, text="控制台", style="Ghost.TButton", command=self._open_cowagent_console).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(cow_frame, text="状态", style="Ghost.TButton", command=self._show_cowagent_status).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(cow_frame, text="启动桥接", style="Ghost.TButton", command=self._start_cowagent_bridge).pack(side=tk.LEFT, padx=(8, 0))
 
         controls = ttk.Frame(outer)
         controls.pack(fill=tk.X, pady=(0, 12))
@@ -757,6 +761,28 @@ class MonitorApp:
 
     def _show_cowagent_status(self) -> None:
         threading.Thread(target=self._run_cowagent_status, daemon=True).start()
+
+    def _start_cowagent_bridge(self) -> None:
+        if self.cowagent_bridge_worker and self.cowagent_bridge_worker.is_alive():
+            self._log("CowAgent outbox 桥接已经在运行")
+            return
+        try:
+            _, _, targets = load_weixin_targets()
+        except Exception as exc:
+            messagebox.showwarning(
+                "CowAgent 桥接未就绪",
+                f"{exc}\n\n请确认：1. CowAgent 已启动并扫码登录微信；2. 你已经在微信里给 CowAgent 发过一句话。",
+            )
+            return
+        self.cowagent_bridge_stop.clear()
+        self.cowagent_bridge_worker = threading.Thread(target=self._run_cowagent_bridge, daemon=True)
+        self.cowagent_bridge_worker.start()
+        self.cowagent_endpoint_var.set("outbox")
+        self._log(f"CowAgent outbox 桥接已启动，目标会话 {len(targets)} 个")
+
+    def _run_cowagent_bridge(self) -> None:
+        bridge = CowAgentOutboxBridge(logger=lambda msg: self.queue.put(("log", msg)))
+        bridge.run_forever(stop=self.cowagent_bridge_stop.is_set)
 
     def _run_cowagent_status(self) -> None:
         try:
@@ -2572,6 +2598,8 @@ class MonitorApp:
             messagebox.showwarning("间隔无效", "检查间隔必须是数字。")
             return
 
+        if cowagent_endpoint.lower() in ("outbox", "file", "local"):
+            self._start_cowagent_bridge()
         self.stop_event.clear()
         self.worker = threading.Thread(
             target=self._run_worker,
@@ -2610,6 +2638,7 @@ class MonitorApp:
 
     def _stop(self) -> None:
         self.stop_event.set()
+        self.cowagent_bridge_stop.set()
         self.news_monitor_started_at = None
         self.status_var.set("停止中")
         self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["coral_dark"])
