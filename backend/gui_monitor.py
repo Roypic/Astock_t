@@ -735,13 +735,21 @@ class MonitorApp:
             "将打开一个终端窗口并运行 CowAgent 官方安装脚本。安装过程可能需要你按提示配置模型和微信通道，是否继续？",
         ):
             command = COWAGENT_INSTALL_PS if sys.platform.startswith("win") else COWAGENT_INSTALL_SH
-            self._launch_terminal_command(command, title="CowAgent Install")
-            self._log("已打开 CowAgent 安装终端")
+            try:
+                self._launch_terminal_command(command, title="CowAgent Install")
+                self._log("已打开 CowAgent 安装终端")
+            except Exception as exc:
+                messagebox.showerror("CowAgent 安装启动失败", str(exc))
+                self._log(f"CowAgent 安装启动失败：{exc}")
 
     def _start_cowagent(self) -> None:
         command = "cow start && cow status"
-        self._launch_terminal_command(command, title="CowAgent Start")
-        self._log("已打开 CowAgent 启动终端")
+        try:
+            self._launch_terminal_command(command, title="CowAgent Start")
+            self._log("已打开 CowAgent 启动终端")
+        except Exception as exc:
+            messagebox.showerror("CowAgent 启动失败", str(exc))
+            self._log(f"CowAgent 启动失败：{exc}")
 
     def _open_cowagent_console(self) -> None:
         webbrowser.open(COWAGENT_CONSOLE_URL)
@@ -784,9 +792,8 @@ class MonitorApp:
             )
             return
         if sys.platform == "darwin":
-            terminal_command = "bash -lc " + shlex.quote(command + "; echo; read -r -p '按 Enter 关闭窗口...'")
-            script = f'tell application "Terminal" to do script {json.dumps(terminal_command)}'
-            subprocess.Popen(["osascript", "-e", script])
+            script_path = self._write_macos_command_file(command, title)
+            subprocess.Popen(["open", str(script_path)])
             return
 
         wrapped = "bash -lc " + shlex.quote(command + "; echo; read -r -p 'Press Enter to close...'")
@@ -801,6 +808,32 @@ class MonitorApp:
                 subprocess.Popen(args)
                 return
         subprocess.Popen(["bash", "-lc", command])
+
+    def _write_macos_command_file(self, command: str, title: str) -> Path:
+        scripts_dir = app_dir() / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        safe_title = re.sub(r"[^A-Za-z0-9_.-]+", "_", title).strip("_") or "CowAgent"
+        script_path = scripts_dir / f"{safe_title}.command"
+        body = "\n".join(
+            [
+                "#!/bin/bash",
+                "export PATH=\"$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"",
+                "clear",
+                f"echo {shlex.quote(title)}",
+                "echo",
+                command,
+                "status=$?",
+                "echo",
+                "echo \"退出码：$status\"",
+                "echo \"完成后可以关闭此窗口。\"",
+                "read -r -p \"按 Enter 关闭窗口...\"",
+                "exit \"$status\"",
+                "",
+            ]
+        )
+        script_path.write_text(body, encoding="utf-8")
+        script_path.chmod(0o755)
+        return script_path
 
     def _choose_dir(self) -> None:
         path = filedialog.askdirectory(title="选择模型文件夹", initialdir=str(self.models_dir))
