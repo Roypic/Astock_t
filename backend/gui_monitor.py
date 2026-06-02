@@ -781,8 +781,11 @@ class MonitorApp:
     def _launch_terminal_command(self, command: str, title: str = "Command") -> None:
         if sys.platform.startswith("win"):
             full_command = (
+                "chcp 65001 > $null; "
+                "[Console]::InputEncoding=[System.Text.Encoding]::UTF8; "
                 "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
                 "$OutputEncoding=[System.Text.Encoding]::UTF8; "
+                "$env:PYTHONUTF8='1'; "
                 f"{command}; "
                 "Write-Host ''; Write-Host '完成后可以关闭此窗口。';"
             )
