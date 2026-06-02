@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-05-29 19:56:39",
+  "generated_at": "2026-06-02 20:29:07",
   "entry_window": "09:30-15:00",
-  "latest_day": "2026-05-29",
-  "previous_day": "2026-05-28",
-  "baseline_train_start": "2026-04-14",
-  "baseline_train_end": "2026-05-28",
-  "updated_train_start": "2026-04-15",
-  "updated_train_end": "2026-05-29",
+  "latest_day": "2026-06-02",
+  "previous_day": "2026-06-01",
+  "baseline_train_start": "2026-04-16",
+  "baseline_train_end": "2026-06-01",
+  "updated_train_start": "2026-04-17",
+  "updated_train_end": "2026-06-02",
   "models": {
     "东山精密": {
       "code": "002384.SZ",
@@ -19,12 +19,12 @@
         "stop_loss": 0.01,
         "max_basket_dispersion": 0.04,
         "volume_ratio_threshold": 0.0,
-        "trade_sides": "both"
+        "trade_sides": "buy"
       },
       "updated_params": {
         "basket_threshold": 0.02,
         "market_threshold": 0.009,
-        "relative_threshold": 0.006,
+        "relative_threshold": 0.009,
         "avg_threshold": 0.006,
         "take_profit": 0.024,
         "stop_loss": 0.01,
@@ -47,14 +47,14 @@
       "baseline_on_latest_day": {
         "n": 1,
         "win_rate_pct": 0.0,
-        "avg_result_pct": -0.99,
-        "sum_result_pct": -0.99,
-        "max_drawdown_pct": -0.99,
+        "avg_result_pct": 0.0,
+        "sum_result_pct": 0.0,
+        "max_drawdown_pct": 0.0,
         "neg_residual_pct": 0.0,
         "bad_tail_rate_pct": 0.0,
         "target_rate_pct": 0.0,
-        "buy_count": 0,
-        "sell_count": 1
+        "buy_count": 1,
+        "sell_count": 0
       },
       "updated_train": {
         "n": 5,
@@ -69,15 +69,15 @@
         "sell_count": 0
       },
       "baseline_previous_5d": {
-        "n": 2,
+        "n": 1,
         "win_rate_pct": 100.0,
-        "avg_result_pct": 1.31,
-        "sum_result_pct": 2.63,
+        "avg_result_pct": 2.4,
+        "sum_result_pct": 2.4,
         "max_drawdown_pct": 0.0,
         "neg_residual_pct": 0.0,
         "bad_tail_rate_pct": 0.0,
-        "target_rate_pct": 50.0,
-        "buy_count": 2,
+        "target_rate_pct": 100.0,
+        "buy_count": 1,
         "sell_count": 0
       },
       "updated_latest_5d": {
@@ -95,14 +95,14 @@
       "old_params_on_updated_window": {
         "n": 6,
         "win_rate_pct": 50.0,
-        "avg_result_pct": 0.34,
-        "sum_result_pct": 2.04,
+        "avg_result_pct": 0.5,
+        "sum_result_pct": 3.03,
         "max_drawdown_pct": -2.0,
         "neg_residual_pct": 0.0,
         "bad_tail_rate_pct": 16.67,
         "target_rate_pct": 33.33,
-        "buy_count": 5,
-        "sell_count": 1
+        "buy_count": 6,
+        "sell_count": 0
       },
       "new_params_on_baseline_window": {
         "n": 5,
@@ -122,7 +122,7 @@
       "final_params": {
         "basket_threshold": 0.02,
         "market_threshold": 0.009,
-        "relative_threshold": 0.006,
+        "relative_threshold": 0.009,
         "avg_threshold": 0.006,
         "take_profit": 0.024,
         "stop_loss": 0.01,
@@ -132,19 +132,19 @@
       },
       "latest_day_trade_by_baseline": [
         {
-          "day": "2026-05-29",
-          "minute": "10:11",
-          "action": "SELL_T",
-          "entry": 214.58,
-          "exit_minute": "10:17",
-          "exit_kind": "stop",
-          "result": -0.00990099009900991,
+          "day": "2026-06-02",
+          "minute": "14:14",
+          "action": "BUY_T",
+          "entry": 210.93,
+          "exit_minute": "15:00",
+          "exit_kind": "close",
+          "result": 0.0,
           "residual": 0.0,
-          "basket_return": -0.023515733329124006,
-          "market_return": -0.016997138737340572,
-          "relative_return": -0.01393997025496067,
-          "basket_dispersion": 0.02421004505612021,
-          "volume_ratio": 0.5417146768621031
+          "basket_return": 0.04857300302973274,
+          "market_return": 0.010107829479724051,
+          "relative_return": 0.006076996970267347,
+          "basket_dispersion": 0.039749046423298934,
+          "volume_ratio": 0.07867855855082716
         }
       ]
     },
@@ -209,15 +209,15 @@
         "sell_count": 0
       },
       "baseline_previous_5d": {
-        "n": 3,
+        "n": 2,
         "win_rate_pct": 0.0,
-        "avg_result_pct": -0.64,
-        "sum_result_pct": -1.93,
-        "max_drawdown_pct": -1.93,
-        "neg_residual_pct": -0.37,
-        "bad_tail_rate_pct": 33.33,
+        "avg_result_pct": -0.74,
+        "sum_result_pct": -1.48,
+        "max_drawdown_pct": -1.48,
+        "neg_residual_pct": -0.28,
+        "bad_tail_rate_pct": 50.0,
         "target_rate_pct": 0.0,
-        "buy_count": 3,
+        "buy_count": 2,
         "sell_count": 0
       },
       "updated_latest_5d": {
@@ -286,7 +286,7 @@
         "trade_sides": "both"
       },
       "updated_params": {
-        "basket_threshold": 0.016,
+        "basket_threshold": 0.02,
         "market_threshold": 0.003,
         "relative_threshold": 0.003,
         "avg_threshold": 0.006,
@@ -297,94 +297,94 @@
         "trade_sides": "both"
       },
       "baseline_train": {
-        "n": 12,
-        "win_rate_pct": 66.67,
-        "avg_result_pct": 1.24,
-        "sum_result_pct": 14.85,
-        "max_drawdown_pct": -2.4,
-        "neg_residual_pct": 0.0,
-        "bad_tail_rate_pct": 25.0,
-        "target_rate_pct": 58.33,
-        "buy_count": 12,
-        "sell_count": 0
-      },
-      "baseline_on_latest_day": {
-        "n": 0,
-        "win_rate_pct": 0.0,
-        "avg_result_pct": 0.0,
-        "sum_result_pct": 0.0,
-        "max_drawdown_pct": 0.0,
-        "neg_residual_pct": 0.0,
-        "bad_tail_rate_pct": 0.0,
-        "target_rate_pct": 0.0,
-        "buy_count": 0,
-        "sell_count": 0
-      },
-      "updated_train": {
         "n": 11,
         "win_rate_pct": 72.73,
-        "avg_result_pct": 1.46,
-        "sum_result_pct": 16.05,
+        "avg_result_pct": 1.4,
+        "sum_result_pct": 15.4,
         "max_drawdown_pct": -2.4,
         "neg_residual_pct": 0.0,
         "bad_tail_rate_pct": 18.18,
-        "target_rate_pct": 63.64,
+        "target_rate_pct": 54.55,
         "buy_count": 11,
         "sell_count": 0
       },
-      "baseline_previous_5d": {
-        "n": 3,
-        "win_rate_pct": 66.67,
-        "avg_result_pct": 1.2,
-        "sum_result_pct": 3.6,
+      "baseline_on_latest_day": {
+        "n": 1,
+        "win_rate_pct": 0.0,
+        "avg_result_pct": -1.2,
+        "sum_result_pct": -1.2,
         "max_drawdown_pct": -1.2,
         "neg_residual_pct": 0.0,
-        "bad_tail_rate_pct": 33.33,
-        "target_rate_pct": 66.67,
-        "buy_count": 3,
+        "bad_tail_rate_pct": 100.0,
+        "target_rate_pct": 0.0,
+        "buy_count": 1,
         "sell_count": 0
       },
-      "updated_latest_5d": {
-        "n": 2,
+      "updated_train": {
+        "n": 10,
+        "win_rate_pct": 70.0,
+        "avg_result_pct": 1.27,
+        "sum_result_pct": 12.7,
+        "max_drawdown_pct": -1.2,
+        "neg_residual_pct": -0.35,
+        "bad_tail_rate_pct": 10.0,
+        "target_rate_pct": 50.0,
+        "buy_count": 10,
+        "sell_count": 0
+      },
+      "baseline_previous_5d": {
+        "n": 1,
         "win_rate_pct": 100.0,
         "avg_result_pct": 2.4,
-        "sum_result_pct": 4.8,
+        "sum_result_pct": 2.4,
         "max_drawdown_pct": 0.0,
         "neg_residual_pct": 0.0,
         "bad_tail_rate_pct": 0.0,
         "target_rate_pct": 100.0,
-        "buy_count": 2,
+        "buy_count": 1,
+        "sell_count": 0
+      },
+      "updated_latest_5d": {
+        "n": 1,
+        "win_rate_pct": 100.0,
+        "avg_result_pct": 2.4,
+        "sum_result_pct": 2.4,
+        "max_drawdown_pct": 0.0,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 0.0,
+        "target_rate_pct": 100.0,
+        "buy_count": 1,
         "sell_count": 0
       },
       "old_params_on_updated_window": {
         "n": 11,
-        "win_rate_pct": 72.73,
-        "avg_result_pct": 1.46,
-        "sum_result_pct": 16.05,
+        "win_rate_pct": 63.64,
+        "avg_result_pct": 1.13,
+        "sum_result_pct": 12.45,
         "max_drawdown_pct": -2.4,
         "neg_residual_pct": 0.0,
-        "bad_tail_rate_pct": 18.18,
-        "target_rate_pct": 63.64,
+        "bad_tail_rate_pct": 27.27,
+        "target_rate_pct": 54.55,
         "buy_count": 11,
         "sell_count": 0
       },
       "new_params_on_baseline_window": {
-        "n": 12,
-        "win_rate_pct": 66.67,
-        "avg_result_pct": 1.24,
-        "sum_result_pct": 14.85,
-        "max_drawdown_pct": -2.4,
-        "neg_residual_pct": 0.0,
-        "bad_tail_rate_pct": 25.0,
-        "target_rate_pct": 58.33,
-        "buy_count": 12,
+        "n": 11,
+        "win_rate_pct": 72.73,
+        "avg_result_pct": 1.3,
+        "sum_result_pct": 14.32,
+        "max_drawdown_pct": -1.2,
+        "neg_residual_pct": -0.35,
+        "bad_tail_rate_pct": 9.09,
+        "target_rate_pct": 45.45,
+        "buy_count": 11,
         "sell_count": 0
       },
       "adopt_updated_params": true,
-      "adopt_reason": "参数未变化，维持当前稳定模型",
+      "adopt_reason": "新参数通过稳定性门槛",
       "final_params_source": "updated",
       "final_params": {
-        "basket_threshold": 0.016,
+        "basket_threshold": 0.02,
         "market_threshold": 0.003,
         "relative_threshold": 0.003,
         "avg_threshold": 0.006,
@@ -394,7 +394,23 @@
         "volume_ratio_threshold": 0.0,
         "trade_sides": "both"
       },
-      "latest_day_trade_by_baseline": []
+      "latest_day_trade_by_baseline": [
+        {
+          "day": "2026-06-02",
+          "minute": "09:38",
+          "action": "BUY_T",
+          "entry": 193.86,
+          "exit_minute": "09:41",
+          "exit_kind": "stop",
+          "result": -0.01200000000000001,
+          "residual": 0.0,
+          "basket_return": 0.019765061083850826,
+          "market_return": 0.0038082086359980897,
+          "relative_return": 0.015093210415642117,
+          "basket_dispersion": 0.00927012520726108,
+          "volume_ratio": 1.0
+        }
+      ]
     },
     "利通电子": {
       "code": "603629.XSHG",
@@ -410,7 +426,7 @@
         "trade_sides": "both"
       },
       "updated_params": {
-        "basket_threshold": 0.016,
+        "basket_threshold": 0.02,
         "market_threshold": 0.003,
         "relative_threshold": 0.003,
         "avg_threshold": 0.006,
@@ -433,25 +449,25 @@
         "sell_count": 0
       },
       "baseline_on_latest_day": {
-        "n": 0,
+        "n": 1,
         "win_rate_pct": 0.0,
-        "avg_result_pct": 0.0,
-        "sum_result_pct": 0.0,
-        "max_drawdown_pct": 0.0,
+        "avg_result_pct": -1.2,
+        "sum_result_pct": -1.2,
+        "max_drawdown_pct": -1.2,
         "neg_residual_pct": 0.0,
-        "bad_tail_rate_pct": 0.0,
+        "bad_tail_rate_pct": 100.0,
         "target_rate_pct": 0.0,
-        "buy_count": 0,
+        "buy_count": 1,
         "sell_count": 0
       },
       "updated_train": {
         "n": 5,
         "win_rate_pct": 60.0,
-        "avg_result_pct": 0.84,
-        "sum_result_pct": 4.21,
-        "max_drawdown_pct": -1.31,
-        "neg_residual_pct": -0.11,
-        "bad_tail_rate_pct": 20.0,
+        "avg_result_pct": 0.63,
+        "sum_result_pct": 3.13,
+        "max_drawdown_pct": -2.4,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 40.0,
         "target_rate_pct": 40.0,
         "buy_count": 5,
         "sell_count": 0
@@ -471,42 +487,42 @@
       "updated_latest_5d": {
         "n": 1,
         "win_rate_pct": 0.0,
-        "avg_result_pct": -0.11,
-        "sum_result_pct": -0.11,
-        "max_drawdown_pct": -0.11,
-        "neg_residual_pct": -0.11,
-        "bad_tail_rate_pct": 0.0,
+        "avg_result_pct": -1.2,
+        "sum_result_pct": -1.2,
+        "max_drawdown_pct": -1.2,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 100.0,
         "target_rate_pct": 0.0,
         "buy_count": 1,
         "sell_count": 0
       },
       "old_params_on_updated_window": {
-        "n": 5,
-        "win_rate_pct": 60.0,
-        "avg_result_pct": 0.84,
-        "sum_result_pct": 4.21,
-        "max_drawdown_pct": -1.31,
+        "n": 6,
+        "win_rate_pct": 50.0,
+        "avg_result_pct": 0.5,
+        "sum_result_pct": 3.01,
+        "max_drawdown_pct": -2.51,
         "neg_residual_pct": -0.11,
-        "bad_tail_rate_pct": 20.0,
-        "target_rate_pct": 40.0,
-        "buy_count": 5,
+        "bad_tail_rate_pct": 33.33,
+        "target_rate_pct": 33.33,
+        "buy_count": 6,
         "sell_count": 0
       },
       "new_params_on_baseline_window": {
-        "n": 5,
-        "win_rate_pct": 60.0,
-        "avg_result_pct": 0.84,
-        "sum_result_pct": 4.21,
-        "max_drawdown_pct": -1.31,
-        "neg_residual_pct": -0.11,
-        "bad_tail_rate_pct": 20.0,
-        "target_rate_pct": 40.0,
-        "buy_count": 5,
+        "n": 4,
+        "win_rate_pct": 75.0,
+        "avg_result_pct": 1.08,
+        "sum_result_pct": 4.33,
+        "max_drawdown_pct": -1.2,
+        "neg_residual_pct": 0.0,
+        "bad_tail_rate_pct": 25.0,
+        "target_rate_pct": 50.0,
+        "buy_count": 4,
         "sell_count": 0
       },
-      "adopt_updated_params": true,
-      "adopt_reason": "参数未变化，维持当前稳定模型",
-      "final_params_source": "updated",
+      "adopt_updated_params": false,
+      "adopt_reason": "新参数回撤明显变差",
+      "final_params_source": "baseline",
       "final_params": {
         "basket_threshold": 0.016,
         "market_threshold": 0.003,
@@ -518,7 +534,23 @@
         "volume_ratio_threshold": 1.1,
         "trade_sides": "both"
       },
-      "latest_day_trade_by_baseline": []
+      "latest_day_trade_by_baseline": [
+        {
+          "day": "2026-06-02",
+          "minute": "13:34",
+          "action": "BUY_T",
+          "entry": 206.5,
+          "exit_minute": "13:35",
+          "exit_kind": "stop",
+          "result": -0.01200000000000001,
+          "residual": 0.0,
+          "basket_return": 0.050526835907056644,
+          "market_return": 0.017255621405105826,
+          "relative_return": 0.008501832229770856,
+          "basket_dispersion": 0.024821118846218137,
+          "volume_ratio": 274.11941284826156
+        }
+      ]
     }
   }
 }

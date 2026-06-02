@@ -28,7 +28,7 @@
     }
   ],
   "params": {
-    "basket_threshold": 0.016,
+    "basket_threshold": 0.02,
     "market_threshold": 0.003,
     "relative_threshold": 0.003,
     "avg_threshold": 0.006,

@@ -30,7 +30,7 @@
   "params": {
     "basket_threshold": 0.02,
     "market_threshold": 0.009,
-    "relative_threshold": 0.006,
+    "relative_threshold": 0.009,
     "avg_threshold": 0.006,
     "take_profit": 0.024,
     "stop_loss": 0.01,
