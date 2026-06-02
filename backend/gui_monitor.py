@@ -16,7 +16,6 @@ import traceback
 import xml.etree.ElementTree as ET
 from http.client import IncompleteRead
 import json
-import shlex
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -25,9 +24,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from cowagent_outbox_bridge import CowAgentOutboxBridge, load_weixin_targets
 from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, Security, TModel, load_models
-from notifier import CowAgentNotifier, MultiNotifier, PushPlusNotifier, WeixinPushNotifier
+from notifier import MultiNotifier, PushPlusNotifier, WeixinPushNotifier
 from net_utils import safe_urlopen
 from weixin_push import default_credentials_path as weixin_credentials_path
 from weixin_push import load_targets as load_weixin_push_targets
@@ -42,9 +40,6 @@ DEFAULT_INTERVAL_SECONDS = 30
 INTRADAY_NEWS_INTERVAL_SECONDS = 60
 MARKET_WEAK_INTERVAL_SECONDS = 300
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
-COWAGENT_CONSOLE_URL = "http://127.0.0.1:9899/"
-COWAGENT_INSTALL_PS = "irm https://cdn.link-ai.tech/code/cow/run.ps1 | iex"
-COWAGENT_INSTALL_SH = "bash <(curl -fsSL https://cdn.link-ai.tech/code/cow/run.sh)"
 NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
 GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 BING_SEARCH_URL = "https://cn.bing.com/search"
@@ -420,8 +415,6 @@ class MonitorApp:
         self.worker: threading.Thread | None = None
         self.news_worker: threading.Thread | None = None
         self.market_worker: threading.Thread | None = None
-        self.cowagent_bridge_stop = threading.Event()
-        self.cowagent_bridge_worker: threading.Thread | None = None
         self.weixin_session_stop = threading.Event()
         self.weixin_session_worker: threading.Thread | None = None
         self.seen_intraday_news: set[str] = set()
@@ -440,7 +433,7 @@ class MonitorApp:
         self.mascot_idle_step = 0
 
         self.token_var = tk.StringVar()
-        self.cowagent_endpoint_var = tk.StringVar()
+        self.weixin_mode_var = tk.StringVar(value="weixin")
         self.model_path_var = tk.StringVar(value=str(self.models_dir))
         self.interval_var = tk.StringVar(value=str(DEFAULT_INTERVAL_SECONDS))
         self.news_watchlist_var = tk.StringVar(value="剑桥科技，东山精密，福晶科技，利通电子")
@@ -517,8 +510,8 @@ class MonitorApp:
         ttk.Label(form, text="间隔秒", style="Muted.TLabel").grid(row=2, column=2, sticky=tk.E, padx=4, pady=7)
         ttk.Entry(form, textvariable=self.interval_var, width=8).grid(row=2, column=3, sticky=tk.W, padx=(8, 0), pady=7)
 
-        ttk.Label(form, text="CowAgent", style="Muted.TLabel").grid(row=3, column=0, sticky=tk.W, padx=(0, 12), pady=7)
-        ttk.Entry(form, textvariable=self.cowagent_endpoint_var).grid(row=3, column=1, columnspan=3, sticky=tk.EW, padx=(0, 0), pady=7)
+        ttk.Label(form, text="微信推送", style="Muted.TLabel").grid(row=3, column=0, sticky=tk.W, padx=(0, 12), pady=7)
+        ttk.Entry(form, textvariable=self.weixin_mode_var).grid(row=3, column=1, columnspan=3, sticky=tk.EW, padx=(0, 0), pady=7)
 
         ttk.Label(form, text="自选监控池", style="Muted.TLabel").grid(row=4, column=0, sticky=tk.W, padx=(0, 12), pady=7)
         ttk.Entry(form, textvariable=self.news_watchlist_var).grid(row=4, column=1, columnspan=3, sticky=tk.EW, padx=(0, 0), pady=7)
@@ -544,7 +537,7 @@ class MonitorApp:
             "PushPlus 使用：1. 打开 PushPlus 官网并用微信扫码登录；"
             "2. 在「一对一推送」页面复制 token；"
             "3. 粘贴到上方 token 输入框；"
-            "4. 微信直推填 weixin，点击「微信登录」扫码，再在微信里给 bot 发一句话；"
+            "4. 微信推送填 weixin，点击「微信登录」扫码，再在微信里给 bot 发一句话；"
             "5. 点「测试推送」，手机微信收到测试消息后再点「开始监控」。"
         )
         tk.Label(
@@ -558,24 +551,19 @@ class MonitorApp:
             font=("Microsoft YaHei UI", 9),
         ).grid(row=0, column=0, sticky=tk.EW)
         ttk.Button(help_frame, text="打开 PushPlus", style="Ghost.TButton", command=self._open_pushplus).grid(row=0, column=1, padx=(12, 0))
-        cow_frame = ttk.Frame(help_frame, style="Soft.TFrame")
-        cow_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0))
+        weixin_frame = ttk.Frame(help_frame, style="Soft.TFrame")
+        weixin_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0))
         tk.Label(
-            cow_frame,
-            text="微信/CowAgent：推荐填 weixin 走内置微信直推；旧版 CowAgent outbox 仍可用。",
+            weixin_frame,
+            text="微信推送：推荐填 weixin。扫码登录后，先在微信里给 bot 发一句话，再点刷新会话。",
             bg=COLORS["card_soft"],
             fg=COLORS["muted"],
             justify=tk.LEFT,
             anchor=tk.W,
             font=("Microsoft YaHei UI", 9),
         ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(cow_frame, text="安装 CowAgent", style="Ghost.TButton", command=self._install_cowagent).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(cow_frame, text="启动", style="Ghost.TButton", command=self._start_cowagent).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(cow_frame, text="控制台", style="Ghost.TButton", command=self._open_cowagent_console).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(cow_frame, text="状态", style="Ghost.TButton", command=self._show_cowagent_status).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(cow_frame, text="启动桥接", style="Ghost.TButton", command=self._start_cowagent_bridge).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(cow_frame, text="微信登录", style="Ghost.TButton", command=self._start_weixin_login).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(cow_frame, text="刷新会话", style="Ghost.TButton", command=self._start_weixin_session).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(weixin_frame, text="微信登录", style="Ghost.TButton", command=self._start_weixin_login).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(weixin_frame, text="刷新会话", style="Ghost.TButton", command=self._start_weixin_session).pack(side=tk.LEFT, padx=(8, 0))
 
         controls = ttk.Frame(outer)
         controls.pack(fill=tk.X, pady=(0, 12))
@@ -740,61 +728,10 @@ class MonitorApp:
     def _open_pushplus(self) -> None:
         webbrowser.open(PUSHPLUS_TOKEN_URL)
 
-    def _install_cowagent(self) -> None:
-        if messagebox.askyesno(
-            "安装 CowAgent",
-            "将打开一个终端窗口并运行 CowAgent 官方安装脚本。安装过程可能需要你按提示配置模型和微信通道，是否继续？",
-        ):
-            command = COWAGENT_INSTALL_PS if sys.platform.startswith("win") else COWAGENT_INSTALL_SH
-            try:
-                self._launch_terminal_command(command, title="CowAgent Install")
-                self._log("已打开 CowAgent 安装终端")
-            except Exception as exc:
-                messagebox.showerror("CowAgent 安装启动失败", str(exc))
-                self._log(f"CowAgent 安装启动失败：{exc}")
-
-    def _start_cowagent(self) -> None:
-        command = "cow start && cow status"
-        try:
-            self._launch_terminal_command(command, title="CowAgent Start")
-            self._log("已打开 CowAgent 启动终端")
-        except Exception as exc:
-            messagebox.showerror("CowAgent 启动失败", str(exc))
-            self._log(f"CowAgent 启动失败：{exc}")
-
-    def _open_cowagent_console(self) -> None:
-        webbrowser.open(COWAGENT_CONSOLE_URL)
-        self._log(f"已打开 CowAgent 控制台：{COWAGENT_CONSOLE_URL}")
-
-    def _show_cowagent_status(self) -> None:
-        threading.Thread(target=self._run_cowagent_status, daemon=True).start()
-
-    def _start_cowagent_bridge(self) -> None:
-        if self.cowagent_bridge_worker and self.cowagent_bridge_worker.is_alive():
-            self._log("CowAgent outbox 桥接已经在运行")
-            return
-        try:
-            _, _, targets = load_weixin_targets()
-        except Exception as exc:
-            messagebox.showwarning(
-                "CowAgent 桥接未就绪",
-                f"{exc}\n\n请确认：1. CowAgent 已启动并扫码登录微信；2. 你已经在微信里给 CowAgent 发过一句话。",
-            )
-            return
-        self.cowagent_bridge_stop.clear()
-        self.cowagent_bridge_worker = threading.Thread(target=self._run_cowagent_bridge, daemon=True)
-        self.cowagent_bridge_worker.start()
-        self.cowagent_endpoint_var.set("outbox")
-        self._log(f"CowAgent outbox 桥接已启动，目标会话 {len(targets)} 个")
-
-    def _run_cowagent_bridge(self) -> None:
-        bridge = CowAgentOutboxBridge(logger=lambda msg: self.queue.put(("log", msg)))
-        bridge.run_forever(stop=self.cowagent_bridge_stop.is_set)
-
     def _start_weixin_login(self) -> None:
         if self.weixin_session_worker and self.weixin_session_worker.is_alive():
             self._log("微信会话刷新已经在运行")
-        self.cowagent_endpoint_var.set("weixin")
+        self.weixin_mode_var.set("weixin")
         self.weixin_session_stop.clear()
         threading.Thread(target=self._run_weixin_login, daemon=True).start()
 
@@ -824,94 +761,6 @@ class MonitorApp:
 
     def _run_weixin_session_worker(self) -> None:
         refresh_context_tokens(logger=lambda msg: self.queue.put(("log", msg)), stop=self.weixin_session_stop.is_set)
-
-    def _run_cowagent_status(self) -> None:
-        try:
-            result = subprocess.run(
-                ["cow", "status"],
-                capture_output=True,
-                text=True,
-                timeout=12,
-                encoding="utf-8",
-                errors="replace",
-            )
-            output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
-            if not output.strip():
-                output = f"cow status 退出码：{result.returncode}"
-            self.queue.put(("text_window", ("CowAgent 状态", output.strip())))
-            self.queue.put(("log", "已读取 CowAgent 状态"))
-        except FileNotFoundError:
-            self.queue.put(("error", "没有找到 cow 命令。请先点击「安装 CowAgent」，安装完成后重新打开本程序。"))
-        except Exception as exc:
-            self.queue.put(("error", f"CowAgent 状态读取失败：{exc}"))
-
-    def _launch_terminal_command(self, command: str, title: str = "Command") -> None:
-        if sys.platform.startswith("win"):
-            full_command = (
-                "chcp 65001 > $null; "
-                "[Console]::InputEncoding=[System.Text.Encoding]::UTF8; "
-                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
-                "$OutputEncoding=[System.Text.Encoding]::UTF8; "
-                "$env:PYTHONUTF8='1'; "
-                "$pyExe = $null; "
-                "try { $pyExe = py -3.11 -c \"import sys; print(sys.executable)\" 2>$null } catch { } "
-                "if (-not $pyExe) { try { $pyExe = py -3 -c \"import sys; print(sys.executable)\" 2>$null } catch { } } "
-                "if ($pyExe) { "
-                "$pyDir = Split-Path $pyExe; "
-                "$pyScripts = Join-Path $pyDir 'Scripts'; "
-                "$env:Path = \"$pyDir;$pyScripts;$env:Path\"; "
-                "} "
-                f"{command}; "
-                "Write-Host ''; Write-Host '完成后可以关闭此窗口。';"
-            )
-            subprocess.Popen(
-                ["powershell", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", full_command],
-                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-            )
-            return
-        if sys.platform == "darwin":
-            script_path = self._write_macos_command_file(command, title)
-            subprocess.Popen(["open", str(script_path)])
-            return
-
-        wrapped = "bash -lc " + shlex.quote(command + "; echo; read -r -p 'Press Enter to close...'")
-        terminals = [
-            ["x-terminal-emulator", "-e", wrapped],
-            ["gnome-terminal", "--", "bash", "-lc", command + "; echo; read -r -p 'Press Enter to close...'"],
-            ["konsole", "-e", "bash", "-lc", command + "; echo; read -r -p 'Press Enter to close...'"],
-            ["xterm", "-e", wrapped],
-        ]
-        for args in terminals:
-            if shutil.which(args[0]):
-                subprocess.Popen(args)
-                return
-        subprocess.Popen(["bash", "-lc", command])
-
-    def _write_macos_command_file(self, command: str, title: str) -> Path:
-        scripts_dir = app_dir() / "scripts"
-        scripts_dir.mkdir(parents=True, exist_ok=True)
-        safe_title = re.sub(r"[^A-Za-z0-9_.-]+", "_", title).strip("_") or "CowAgent"
-        script_path = scripts_dir / f"{safe_title}.command"
-        body = "\n".join(
-            [
-                "#!/bin/bash",
-                "export PATH=\"$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH\"",
-                "clear",
-                f"echo {shlex.quote(title)}",
-                "echo",
-                command,
-                "status=$?",
-                "echo",
-                "echo \"退出码：$status\"",
-                "echo \"完成后可以关闭此窗口。\"",
-                "read -r -p \"按 Enter 关闭窗口...\"",
-                "exit \"$status\"",
-                "",
-            ]
-        )
-        script_path.write_text(body, encoding="utf-8")
-        script_path.chmod(0o755)
-        return script_path
 
     def _choose_dir(self) -> None:
         path = filedialog.askdirectory(title="选择模型文件夹", initialdir=str(self.models_dir))
@@ -952,19 +801,19 @@ class MonitorApp:
 
     def _test_push(self) -> None:
         token = self.token_var.get().strip()
-        cowagent_endpoint = self.cowagent_endpoint_var.get().strip()
-        if not token and not cowagent_endpoint:
-            messagebox.showwarning("缺少推送配置", "请先输入 PushPlus token，或填写 CowAgent webhook/outbox。")
+        weixin_mode = self.weixin_mode_var.get().strip()
+        if not token and not weixin_mode:
+            messagebox.showwarning("缺少推送配置", "请先输入 PushPlus token，或填写微信推送模式 weixin。")
             return
         try:
-            self._build_alert_notifier(token, cowagent_endpoint).send_text("做T提醒测试：GUI 监控程序已接通。", title="做T提醒测试")
+            self._build_alert_notifier(token, weixin_mode).send_text("做T提醒测试：GUI 监控程序已接通。", title="做T提醒测试")
             self._log("测试消息已发送")
             messagebox.showinfo("成功", "测试消息已发送。")
         except Exception as exc:
             messagebox.showerror("推送失败", str(exc))
 
-    def _build_alert_notifier(self, token: str, cowagent_endpoint: str = "") -> MultiNotifier:
-        return MultiNotifier([PushPlusNotifier(token), WeixinPushNotifier(cowagent_endpoint), CowAgentNotifier(cowagent_endpoint)])
+    def _build_alert_notifier(self, token: str, weixin_mode: str = "") -> MultiNotifier:
+        return MultiNotifier([PushPlusNotifier(token), WeixinPushNotifier(weixin_mode)])
 
     def _show_premarket_analysis(self) -> None:
         model_path = Path(self.model_path_var.get().strip())
@@ -2625,10 +2474,10 @@ class MonitorApp:
             return
 
         token = self.token_var.get().strip()
-        cowagent_endpoint = self.cowagent_endpoint_var.get().strip()
+        weixin_mode = self.weixin_mode_var.get().strip()
         model_path = Path(self.model_path_var.get().strip())
-        if not token and not cowagent_endpoint:
-            messagebox.showwarning("缺少推送配置", "请先输入 PushPlus token，或填写 CowAgent webhook/outbox。")
+        if not token and not weixin_mode:
+            messagebox.showwarning("缺少推送配置", "请先输入 PushPlus token，或填写微信推送模式 weixin。")
             return
         if not model_path.exists():
             messagebox.showwarning("模型不存在", "请选择模型 JSON 文件或模型文件夹。")
@@ -2639,14 +2488,12 @@ class MonitorApp:
             messagebox.showwarning("间隔无效", "检查间隔必须是数字。")
             return
 
-        if cowagent_endpoint.lower() in ("outbox", "file", "local"):
-            self._start_cowagent_bridge()
-        if cowagent_endpoint.lower() in ("weixin", "wechat", "wx", "builtin"):
+        if weixin_mode.lower() in ("weixin", "wechat", "wx", "builtin"):
             self._ensure_weixin_session_worker()
         self.stop_event.clear()
         self.worker = threading.Thread(
             target=self._run_worker,
-            args=(model_path, token, cowagent_endpoint, interval),
+            args=(model_path, token, weixin_mode, interval),
             daemon=True,
         )
         self.worker.start()
@@ -2656,7 +2503,7 @@ class MonitorApp:
             self.news_monitor_started_at = datetime.now(BEIJING_TZ)
             self.news_worker = threading.Thread(
                 target=self._run_intraday_news_worker,
-                args=(token, cowagent_endpoint),
+                args=(token, weixin_mode),
                 daemon=True,
             )
             self.news_worker.start()
@@ -2665,7 +2512,7 @@ class MonitorApp:
             self.market_alert_states.clear()
             self.market_worker = threading.Thread(
                 target=self._run_market_weak_worker,
-                args=(model_path, token, cowagent_endpoint),
+                args=(model_path, token, weixin_mode),
                 daemon=True,
             )
             self.market_worker.start()
@@ -2681,19 +2528,18 @@ class MonitorApp:
 
     def _stop(self) -> None:
         self.stop_event.set()
-        self.cowagent_bridge_stop.set()
         self.weixin_session_stop.set()
         self.news_monitor_started_at = None
         self.status_var.set("停止中")
         self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["coral_dark"])
         self._log("正在停止监控")
 
-    def _run_worker(self, model_path: Path, token: str, cowagent_endpoint: str, interval: int) -> None:
+    def _run_worker(self, model_path: Path, token: str, weixin_mode: str, interval: int) -> None:
         try:
             models = load_models(model_path)
             self.queue.put(("log", f"已加载 {len(models)} 个模型：" + "、".join(m.name for m in models)))
             self.queue.put(("risk", self._model_risk_summary(model_path)))
-            engine = ModelSignalEngine(models, app_dir() / "data", token, cowagent_endpoint)
+            engine = ModelSignalEngine(models, app_dir() / "data", token, weixin_mode)
         except Exception as exc:
             self.queue.put(("error", str(exc)))
             return
@@ -2707,8 +2553,8 @@ class MonitorApp:
             self.stop_event.wait(interval)
         self.queue.put(("stopped", None))
 
-    def _run_intraday_news_worker(self, token: str, cowagent_endpoint: str) -> None:
-        notifier = self._build_alert_notifier(token, cowagent_endpoint)
+    def _run_intraday_news_worker(self, token: str, weixin_mode: str) -> None:
+        notifier = self._build_alert_notifier(token, weixin_mode)
         self.queue.put(("log", f"盘中小作文雷达已启动：每 {INTRADAY_NEWS_INTERVAL_SECONDS} 秒检查一次自选股"))
         while not self.stop_event.is_set():
             if not self._is_live_trading_now():
@@ -3343,7 +3189,7 @@ class MonitorApp:
             "summary": f"{name} 热度{rumor_heat} 杀伤{impact} 可信{credibility}",
         }
 
-    def _run_market_weak_worker(self, model_path: Path, token: str, cowagent_endpoint: str) -> None:
+    def _run_market_weak_worker(self, model_path: Path, token: str, weixin_mode: str) -> None:
         try:
             models = load_models(model_path)
             client = MarketClient(ttl_seconds=60)
@@ -3351,7 +3197,7 @@ class MonitorApp:
             self.queue.put(("log", f"大盘/板块走弱提醒启动失败：{exc}"))
             return
 
-        notifier = self._build_alert_notifier(token, cowagent_endpoint)
+        notifier = self._build_alert_notifier(token, weixin_mode)
         self.queue.put(("log", f"大盘/板块走弱提醒已启动：每 {MARKET_WEAK_INTERVAL_SECONDS // 60} 分钟检查一次"))
         while not self.stop_event.is_set():
             if not self._is_live_trading_now():

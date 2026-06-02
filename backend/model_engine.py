@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from notifier import CowAgentNotifier, MultiNotifier, PushPlusNotifier, WeixinPushNotifier
+from notifier import MultiNotifier, PushPlusNotifier, WeixinPushNotifier
 from net_utils import safe_urlopen
 
 
@@ -178,13 +178,13 @@ class ModelSignalEngine:
         models: list[TModel],
         data_dir: Path,
         token: str,
-        cowagent_endpoint: str = "",
+        weixin_mode: str = "",
         entry_windows: tuple[tuple[str, str, str], ...] = DEFAULT_ENTRY_WINDOWS,
     ) -> None:
         self.models = models
         self.client = MarketClient()
         self.store = SignalStore(data_dir / "state.json")
-        self.notifier = MultiNotifier([PushPlusNotifier(token), WeixinPushNotifier(cowagent_endpoint), CowAgentNotifier(cowagent_endpoint)])
+        self.notifier = MultiNotifier([PushPlusNotifier(token), WeixinPushNotifier(weixin_mode)])
         self.entry_windows = entry_windows
 
     def check_all(self) -> dict[str, Any]:

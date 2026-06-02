@@ -2,20 +2,24 @@ from __future__ import annotations
 
 import json
 import os
+import base64
+import random
 import time
 import urllib.parse
 import urllib.request
+import uuid
 import webbrowser
 from pathlib import Path
 from typing import Callable
 
-from cowagent_outbox_bridge import DEFAULT_BASE_URL, send_weixin_text
 from net_utils import safe_urlopen
 
+DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com"
 BOT_TYPE = "3"
 CLIENT_VERSION = "131072"
 CHANNEL_VERSION = "2.0.0"
 SESSION_EXPIRED_ERRCODE = -14
+TEXT_CHUNK_LIMIT = 3500
 
 
 def default_credentials_path() -> Path:
@@ -44,6 +48,63 @@ def _request_json(url: str, method: str = "GET", body: dict | None = None, heade
     req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
     with safe_urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _random_wechat_uin() -> str:
+    return base64.b64encode(str(random.randint(0, 0xFFFFFFFF)).encode("utf-8")).decode("utf-8")
+
+
+def _split_text(text: str, limit: int = TEXT_CHUNK_LIMIT) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    current = []
+    current_len = 0
+    for line in text.splitlines(True):
+        if current and current_len + len(line) > limit:
+            chunks.append("".join(current))
+            current = []
+            current_len = 0
+        while len(line) > limit:
+            chunks.append(line[:limit])
+            line = line[limit:]
+        current.append(line)
+        current_len += len(line)
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
+def send_weixin_text(text: str, token: str, base_url: str, receiver: str, context_token: str) -> None:
+    for chunk in _split_text(text):
+        headers = {
+            "Content-Type": "application/json",
+            "AuthorizationType": "ilink_bot_token",
+            "Authorization": f"Bearer {token}",
+            "X-WECHAT-UIN": _random_wechat_uin(),
+            "iLink-App-Id": "bot",
+            "iLink-App-ClientVersion": CLIENT_VERSION,
+            "User-Agent": "AShareTSignalMonitor/1.0",
+        }
+        body = {
+            "base_info": {"channel_version": CHANNEL_VERSION},
+            "msg": {
+                "from_user_id": "",
+                "to_user_id": receiver,
+                "client_id": uuid.uuid4().hex[:16],
+                "message_type": 2,
+                "message_state": 2,
+                "item_list": [{"type": 1, "text_item": {"text": chunk}}],
+                "context_token": context_token,
+            },
+        }
+        result = _request_json(_ensure_slash(base_url) + "ilink/bot/sendmessage", method="POST", body=body, headers=headers, timeout=15)
+        ret = result.get("ret", result.get("errcode", 0))
+        if ret in (-14, "-14"):
+            raise RuntimeError("微信会话已过期，请在微信里给这个 bot 再发一句话刷新会话。")
+        if ret not in (0, "0", None) and result.get("errcode") not in (0, "0", None):
+            raise RuntimeError(f"微信发送失败：{result}")
+        time.sleep(0.2)
 
 
 def fetch_qr_code(base_url: str = DEFAULT_BASE_URL) -> tuple[str, str]:

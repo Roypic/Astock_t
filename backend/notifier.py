@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from net_utils import safe_urlopen
@@ -100,57 +98,6 @@ class PushPlusNotifier:
         self.send_text(format_signal(signal), title=f"做T信号：{signal['symbol']}")
 
 
-class CowAgentNotifier:
-    def __init__(self, endpoint: str | None = None) -> None:
-        self.endpoint = (endpoint or os.environ.get("COWAGENT_WEBHOOK_URL", "")).strip()
-        self.outbox_dir = Path(os.environ.get("COWAGENT_OUTBOX_DIR", str(Path.home() / ".ashare_t_signal" / "cowagent_outbox")))
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.endpoint) and self.endpoint.lower() not in ("weixin", "wechat", "wx", "builtin")
-
-    def send_text(self, content: str, title: str = "A股提醒") -> None:
-        if not self.enabled:
-            return
-        payload = {
-            "source": "AShareTSignalMonitor",
-            "message_type": "text",
-            "title": title,
-            "content": content,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if self.endpoint.lower() in ("outbox", "file", "local"):
-            self._write_outbox(payload)
-            return
-        try:
-            self._post_payload(payload)
-        except Exception:
-            self._write_outbox(payload)
-            raise
-
-    def send_signal(self, signal: dict[str, Any]) -> None:
-        self.send_text(format_signal(signal), title=f"做T信号：{signal['symbol']}")
-
-    def _post_payload(self, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        req = urllib.request.Request(
-            self.endpoint,
-            data=body,
-            headers={"Content-Type": "application/json", "User-Agent": "AShareTSignalMonitor/1.0"},
-            method="POST",
-        )
-        with safe_urlopen(req, timeout=8) as resp:
-            if getattr(resp, "status", 200) >= 300:
-                raise RuntimeError(f"CowAgent webhook failed: HTTP {resp.status}")
-
-    def _write_outbox(self, payload: dict[str, Any]) -> Path:
-        self.outbox_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        path = self.outbox_dir / f"{stamp}.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        return path
-
-
 class WeixinPushNotifier:
     def __init__(self, mode: str | None = None) -> None:
         self.mode = (mode or os.environ.get("ASHARE_WEIXIN_PUSH", "")).strip().lower()
@@ -210,7 +157,6 @@ def build_notifier() -> MultiNotifier:
         [
             PushPlusNotifier(),
             WeixinPushNotifier(),
-            CowAgentNotifier(),
             WeComNotifier(),
         ]
     )
