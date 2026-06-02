@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install PyInstaller
-        run: python -m pip install --upgrade pip pyinstaller
+        run: python -m pip install --upgrade pip pyinstaller certifi
 
       - name: Write build info
         working-directory: backend
@@ -38,6 +38,8 @@ jobs:
           --windowed
           --name AShareTSignalMonitor
           --add-data "models;models"
+          --hidden-import certifi
+          --collect-data certifi
           --clean
           gui_monitor.py
 

@@ -5,6 +5,8 @@ import os
 import urllib.request
 from typing import Any
 
+from net_utils import safe_urlopen
+
 
 def format_signal(signal: dict[str, Any]) -> str:
     lines = [
@@ -52,7 +54,7 @@ class WeComNotifier:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with safe_urlopen(req, timeout=8) as resp:
             result = json.loads(resp.read().decode("utf-8"))
         if result.get("errcode") != 0:
             raise RuntimeError(f"WeCom webhook failed: {result}")
@@ -86,7 +88,7 @@ class PushPlusNotifier:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with safe_urlopen(req, timeout=8) as resp:
             result = json.loads(resp.read().decode("utf-8"))
         if result.get("code") != 200:
             raise RuntimeError(f"PushPlus failed: {result}")

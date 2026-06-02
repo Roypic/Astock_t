@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from notifier import MultiNotifier, PushPlusNotifier
+from net_utils import safe_urlopen
 
 
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -87,7 +88,7 @@ class MarketClient:
 
         query = urllib.parse.urlencode({"span": "DAY1", "limit": 40})
         req = urllib.request.Request(f"{STOCK_OHLC_URL.format(code=code)}?{query}", headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=12) as resp:
+        with safe_urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
         closes = [float(item["c"]) for item in data.get("ohlcs", []) if "c" in item]
@@ -110,7 +111,7 @@ class MarketClient:
 
         query = urllib.parse.urlencode({"since": "TODAY"})
         req = urllib.request.Request(f"{base_url.format(code=code)}?{query}", headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=12) as resp:
+        with safe_urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 
         prices: list[MinutePrice] = []

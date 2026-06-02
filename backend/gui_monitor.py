@@ -26,6 +26,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, Security, TModel, load_models
 from notifier import PushPlusNotifier
+from net_utils import safe_urlopen
 
 try:
     from build_info import BUILD_SHA
@@ -1103,7 +1104,7 @@ class MonitorApp:
         query = urllib.parse.urlencode({"span": span, "limit": 160})
         url = f"https://market.ft.tech/app/api/v2/stocks/{urllib.parse.quote(ft_code)}/ohlcs?{query}"
         req = urllib.request.Request(url, headers={"X-Client-Name": "ft-claw", "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=12) as resp:
+        with safe_urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         rows: list[dict[str, float | str]] = []
         for item in data.get("ohlcs", []):
@@ -1409,7 +1410,7 @@ class MonitorApp:
             return {}
         url = f"https://ftai.chat/api/v1/market/security/{urllib.parse.quote(symbol)}/info"
         req = urllib.request.Request(url, headers={"User-Agent": "AShareTSignalMonitor/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with safe_urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         return data if isinstance(data, dict) else {}
 
@@ -1798,7 +1799,7 @@ class MonitorApp:
             LATEST_RELEASE_API,
             headers={"Accept": "application/vnd.github+json", "User-Agent": "AShareTSignalMonitor/1.0"},
         )
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with safe_urlopen(req, timeout=15) as resp:
             release = json.loads(resp.read().decode("utf-8"))
         release_sha = str(release.get("target_commitish") or "")
         if not re.fullmatch(r"[0-9a-fA-F]{7,40}", release_sha):
@@ -1827,7 +1828,7 @@ class MonitorApp:
         suffix = release_short or datetime.now(BEIJING_TZ).strftime("%Y%m%d%H%M%S")
         target = updates_dir / f"AShareTSignalMonitor-{suffix}.exe"
         req = urllib.request.Request(download_url, headers={"User-Agent": "AShareTSignalMonitor/1.0"})
-        with urllib.request.urlopen(req, timeout=60) as resp, target.open("wb") as out:
+        with safe_urlopen(req, timeout=60) as resp, target.open("wb") as out:
             shutil.copyfileobj(resp, out)
         if target.stat().st_size < 1024 * 1024:
             raise RuntimeError("下载文件过小，可能不是有效 EXE")
@@ -1942,7 +1943,7 @@ class MonitorApp:
                 "Connection": "close",
             },
         )
-        with urllib.request.urlopen(req, timeout=18) as resp:
+        with safe_urlopen(req, timeout=18) as resp:
             try:
                 raw = resp.read()
             except IncompleteRead as exc:
@@ -2031,7 +2032,7 @@ class MonitorApp:
                 "Connection": "close",
             },
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with safe_urlopen(req, timeout=10) as resp:
             raw = resp.read()
         root = ET.fromstring(raw)
         rows = []
@@ -2687,7 +2688,7 @@ class MonitorApp:
                 "Connection": "close",
             },
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with safe_urlopen(req, timeout=10) as resp:
             html_text = resp.read().decode("utf-8", errors="ignore")
         rows = []
         for match in re.finditer(r'<li class="b_algo".*?<h2.*?<a href="([^"]+)".*?>(.*?)</a>.*?(?:<p>(.*?)</p>)?', html_text, re.S):
@@ -3374,7 +3375,7 @@ class MonitorApp:
                 f"{EASTMONEY_STOCK_INFO_URL}?{params}",
                 headers={"User-Agent": "Mozilla/5.0 AShareTSignalMonitor/1.0", "Accept": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with safe_urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8", errors="ignore"))
             row = data.get("data") if isinstance(data, dict) else {}
             if isinstance(row, dict):
@@ -3389,7 +3390,7 @@ class MonitorApp:
                 f"{EASTMONEY_STOCK_SECTORS_URL}?{params}",
                 headers={"User-Agent": "Mozilla/5.0 AShareTSignalMonitor/1.0", "Accept": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with safe_urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8", errors="ignore"))
             diff = data.get("data", {}).get("diff", []) if isinstance(data, dict) else []
             concepts = []
@@ -3427,7 +3428,7 @@ class MonitorApp:
                 f"{EASTMONEY_CONCEPT_BOARDS_URL}?{params}",
                 headers={"User-Agent": "Mozilla/5.0 AShareTSignalMonitor/1.0", "Accept": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with safe_urlopen(req, timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8", errors="ignore"))
             diff = data.get("data", {}).get("diff", []) if isinstance(data, dict) else []
             for item in diff if isinstance(diff, list) else []:
