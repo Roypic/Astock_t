@@ -12,6 +12,7 @@ import time
 import html
 import email.utils
 import hashlib
+import traceback
 import xml.etree.ElementTree as ET
 from http.client import IncompleteRead
 import json
@@ -364,6 +365,8 @@ COLORS = {
 
 def app_dir() -> Path:
     if getattr(sys, "frozen", False):
+        if sys.platform == "darwin":
+            return Path.home() / "Library" / "Application Support" / "AShareTSignalMonitor"
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
@@ -384,6 +387,15 @@ def ensure_default_models() -> Path:
             if not dest.exists() or dest.read_text(encoding="utf-8") != model_file.read_text(encoding="utf-8"):
                 shutil.copy2(model_file, dest)
     return target
+
+
+def startup_log_path() -> Path:
+    try:
+        base = app_dir()
+        base.mkdir(parents=True, exist_ok=True)
+        return base / "startup_error.log"
+    except Exception:
+        return Path.home() / "AShareTSignalMonitor-startup-error.log"
 
 
 class MonitorApp:
@@ -3841,9 +3853,21 @@ class MonitorApp:
 
 def main() -> None:
     os.environ.setdefault("PYTHONUTF8", "1")
-    root = tk.Tk()
-    MonitorApp(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        MonitorApp(root)
+        root.mainloop()
+    except Exception:
+        log_path = startup_log_path()
+        log_path.write_text(traceback.format_exc(), encoding="utf-8")
+        try:
+            error_root = tk.Tk()
+            error_root.withdraw()
+            messagebox.showerror("启动失败", f"程序启动失败，错误日志已写入：\n{log_path}")
+            error_root.destroy()
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == "__main__":

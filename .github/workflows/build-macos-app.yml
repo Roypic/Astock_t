@@ -37,18 +37,37 @@ jobs:
           --windowed
           --name AShareTSignalMonitor
           --add-data "models:models"
+          --hidden-import tkinter
+          --collect-submodules tkinter
+          --clean
+          gui_monitor.py
+
+      - name: Build macOS console binary for diagnostics
+        working-directory: backend
+        run: >
+          python -m PyInstaller
+          --onefile
+          --console
+          --name AShareTSignalMonitor-cli
+          --add-data "models:models"
+          --hidden-import tkinter
+          --collect-submodules tkinter
           --clean
           gui_monitor.py
 
       - name: Package app
         working-directory: backend/dist
-        run: ditto -c -k --sequesterRsrc --keepParent AShareTSignalMonitor.app AShareTSignalMonitor-macOS.zip
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent AShareTSignalMonitor.app AShareTSignalMonitor-macOS.zip
+          ditto -c -k --sequesterRsrc --keepParent AShareTSignalMonitor-cli AShareTSignalMonitor-macOS-cli.zip
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
           name: AShareTSignalMonitor-macOS
-          path: backend/dist/AShareTSignalMonitor-macOS.zip
+          path: |
+            backend/dist/AShareTSignalMonitor-macOS.zip
+            backend/dist/AShareTSignalMonitor-macOS-cli.zip
           if-no-files-found: error
 
       - name: Publish macOS Release
@@ -57,7 +76,9 @@ jobs:
           tag_name: macos-latest
           name: macOS Latest
           body: "Latest unsigned macOS GUI build of AShareTSignalMonitor.app. Commit: ${{ github.sha }}"
-          files: backend/dist/AShareTSignalMonitor-macOS.zip
+          files: |
+            backend/dist/AShareTSignalMonitor-macOS.zip
+            backend/dist/AShareTSignalMonitor-macOS-cli.zip
           make_latest: false
           prerelease: false
           fail_on_unmatched_files: true
