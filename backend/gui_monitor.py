@@ -16,6 +16,7 @@ import traceback
 import xml.etree.ElementTree as ET
 from http.client import IncompleteRead
 import json
+import shlex
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -37,6 +38,9 @@ DEFAULT_INTERVAL_SECONDS = 30
 INTRADAY_NEWS_INTERVAL_SECONDS = 60
 MARKET_WEAK_INTERVAL_SECONDS = 300
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
+COWAGENT_CONSOLE_URL = "http://127.0.0.1:9899/"
+COWAGENT_INSTALL_PS = "irm https://cdn.link-ai.tech/code/cow/run.ps1 | iex"
+COWAGENT_INSTALL_SH = "bash <(curl -fsSL https://cdn.link-ai.tech/code/cow/run.sh)"
 NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
 GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 BING_SEARCH_URL = "https://cn.bing.com/search"
@@ -546,6 +550,21 @@ class MonitorApp:
             font=("Microsoft YaHei UI", 9),
         ).grid(row=0, column=0, sticky=tk.EW)
         ttk.Button(help_frame, text="打开 PushPlus", style="Ghost.TButton", command=self._open_pushplus).grid(row=0, column=1, padx=(12, 0))
+        cow_frame = ttk.Frame(help_frame, style="Soft.TFrame")
+        cow_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0))
+        tk.Label(
+            cow_frame,
+            text="CowAgent：安装后打开控制台，在 Channels 里接入微信；CowAgent 输入框可填 outbox 写入本地队列。",
+            bg=COLORS["card_soft"],
+            fg=COLORS["muted"],
+            justify=tk.LEFT,
+            anchor=tk.W,
+            font=("Microsoft YaHei UI", 9),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(cow_frame, text="安装 CowAgent", style="Ghost.TButton", command=self._install_cowagent).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(cow_frame, text="启动", style="Ghost.TButton", command=self._start_cowagent).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(cow_frame, text="控制台", style="Ghost.TButton", command=self._open_cowagent_console).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(cow_frame, text="状态", style="Ghost.TButton", command=self._show_cowagent_status).pack(side=tk.LEFT, padx=(8, 0))
 
         controls = ttk.Frame(outer)
         controls.pack(fill=tk.X, pady=(0, 12))
@@ -709,6 +728,79 @@ class MonitorApp:
 
     def _open_pushplus(self) -> None:
         webbrowser.open(PUSHPLUS_TOKEN_URL)
+
+    def _install_cowagent(self) -> None:
+        if messagebox.askyesno(
+            "安装 CowAgent",
+            "将打开一个终端窗口并运行 CowAgent 官方安装脚本。安装过程可能需要你按提示配置模型和微信通道，是否继续？",
+        ):
+            command = COWAGENT_INSTALL_PS if sys.platform.startswith("win") else COWAGENT_INSTALL_SH
+            self._launch_terminal_command(command, title="CowAgent Install")
+            self._log("已打开 CowAgent 安装终端")
+
+    def _start_cowagent(self) -> None:
+        command = "cow start && cow status"
+        self._launch_terminal_command(command, title="CowAgent Start")
+        self._log("已打开 CowAgent 启动终端")
+
+    def _open_cowagent_console(self) -> None:
+        webbrowser.open(COWAGENT_CONSOLE_URL)
+        self._log(f"已打开 CowAgent 控制台：{COWAGENT_CONSOLE_URL}")
+
+    def _show_cowagent_status(self) -> None:
+        threading.Thread(target=self._run_cowagent_status, daemon=True).start()
+
+    def _run_cowagent_status(self) -> None:
+        try:
+            result = subprocess.run(
+                ["cow", "status"],
+                capture_output=True,
+                text=True,
+                timeout=12,
+                encoding="utf-8",
+                errors="replace",
+            )
+            output = (result.stdout or "") + ("\n" + result.stderr if result.stderr else "")
+            if not output.strip():
+                output = f"cow status 退出码：{result.returncode}"
+            self.queue.put(("text_window", ("CowAgent 状态", output.strip())))
+            self.queue.put(("log", "已读取 CowAgent 状态"))
+        except FileNotFoundError:
+            self.queue.put(("error", "没有找到 cow 命令。请先点击「安装 CowAgent」，安装完成后重新打开本程序。"))
+        except Exception as exc:
+            self.queue.put(("error", f"CowAgent 状态读取失败：{exc}"))
+
+    def _launch_terminal_command(self, command: str, title: str = "Command") -> None:
+        if sys.platform.startswith("win"):
+            full_command = (
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+                "$OutputEncoding=[System.Text.Encoding]::UTF8; "
+                f"{command}; "
+                "Write-Host ''; Write-Host '完成后可以关闭此窗口。';"
+            )
+            subprocess.Popen(
+                ["powershell", "-NoExit", "-ExecutionPolicy", "Bypass", "-Command", full_command],
+                creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+            )
+            return
+        if sys.platform == "darwin":
+            terminal_command = "bash -lc " + shlex.quote(command + "; echo; read -r -p '按 Enter 关闭窗口...'")
+            script = f'tell application "Terminal" to do script {json.dumps(terminal_command)}'
+            subprocess.Popen(["osascript", "-e", script])
+            return
+
+        wrapped = "bash -lc " + shlex.quote(command + "; echo; read -r -p 'Press Enter to close...'")
+        terminals = [
+            ["x-terminal-emulator", "-e", wrapped],
+            ["gnome-terminal", "--", "bash", "-lc", command + "; echo; read -r -p 'Press Enter to close...'"],
+            ["konsole", "-e", "bash", "-lc", command + "; echo; read -r -p 'Press Enter to close...'"],
+            ["xterm", "-e", wrapped],
+        ]
+        for args in terminals:
+            if shutil.which(args[0]):
+                subprocess.Popen(args)
+                return
+        subprocess.Popen(["bash", "-lc", command])
 
     def _choose_dir(self) -> None:
         path = filedialog.askdirectory(title="选择模型文件夹", initialdir=str(self.models_dir))
@@ -3758,6 +3850,9 @@ class MonitorApp:
                 messagebox.showerror("启动失败", str(payload))
             elif kind == "risk":
                 self.risk_var.set(str(payload))
+            elif kind == "text_window":
+                title, content = payload if isinstance(payload, tuple) else ("信息", str(payload))
+                self._open_text_window(str(title), str(content))
             elif kind == "info_premarket":
                 self.status_var.set("信息面盘前完成")
                 self.status_badge.configure(bg=COLORS["mint"], fg=COLORS["sage_dark"])
