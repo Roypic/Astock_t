@@ -416,7 +416,7 @@ class MonitorWindow(QMainWindow):
         self.token.setEchoMode(QLineEdit.Password)
         self.weixin_mode = QLineEdit("weixin")
         self.interval = QLineEdit(str(DEFAULT_INTERVAL_SECONDS))
-        self.watchlist = QLineEdit("剑桥科技，东山精密，福晶科技，利通电子，锡业股份，沃格光电")
+        self.watchlist = QLineEdit("剑桥科技，东山精密，福晶科技，利通电子，锡业股份，沃格光电，生益科技，通信ETF国泰，科创芯片ETF鹏华")
         self.only_watchlist = QCheckBox("只监控自选池匹配到的模型")
         self.only_watchlist.setChecked(True)
         choose_file = ModernButton("选择模型", "ghost")

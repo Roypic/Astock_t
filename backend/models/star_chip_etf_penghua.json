@@ -1,0 +1,60 @@
+{
+  "name": "科创芯片ETF鹏华",
+  "code": "588920.XSHG",
+  "basket": [
+    {
+      "name": "中芯国际",
+      "code": "688981.XSHG"
+    },
+    {
+      "name": "寒武纪",
+      "code": "688256.XSHG"
+    },
+    {
+      "name": "海光信息",
+      "code": "688041.XSHG"
+    },
+    {
+      "name": "澜起科技",
+      "code": "688008.XSHG"
+    },
+    {
+      "name": "中微公司",
+      "code": "688012.XSHG"
+    },
+    {
+      "name": "沪硅产业",
+      "code": "688126.XSHG"
+    }
+  ],
+  "params": {
+    "basket_threshold": 0.0,
+    "market_threshold": 0.0,
+    "relative_threshold": 0.0,
+    "avg_threshold": 0.0,
+    "take_profit": 0.016,
+    "stop_loss": 0.008,
+    "max_basket_dispersion": 0.055,
+    "volume_ratio_threshold": 0.0,
+    "max_daily_signals": 5,
+    "trade_sides": "both",
+    "strategy_mode": "intraday_aggressive",
+    "min_signal_score": 1.2,
+    "min_signal_gap_minutes": 10
+  },
+  "backtest": {
+    "window": "近30个交易日分钟回测",
+    "mode": "激进日内做T：只评估信号后当日最大可捕捉价差，不评估底仓隔夜走势；正T/倒T均可，一天多点位",
+    "trade_count": 150,
+    "win_rate_pct": 90.0,
+    "avg_result_pct": 1.27,
+    "sum_result_pct": 189.89,
+    "max_drawdown_pct": 0.0,
+    "bad_tail_rate_pct": 0.0,
+    "target_rate_pct": 57.33,
+    "zero_rate_pct": 10.0,
+    "buy_count": 109,
+    "sell_count": 41,
+    "warning": "激进回测只衡量日内做T价差机会，不代表实际成交、滑点、挂单成功率或底仓盈亏；请小心使用。"
+  }
+}

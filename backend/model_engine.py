@@ -15,8 +15,10 @@ from net_utils import safe_urlopen
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 STOCK_PRICE_URL = "https://market.ft.tech/app/api/v2/stocks/{code}/prices"
+ETF_PRICE_URL = "https://market.ft.tech/app/api/v2/etfs/{code}/prices"
 INDEX_PRICE_URL = "https://market.ft.tech/app/api/v2/indices/{code}/prices"
 STOCK_OHLC_URL = "https://market.ft.tech/app/api/v2/stocks/{code}/ohlcs"
+ETF_OHLC_URL = "https://market.ft.tech/app/api/v2/etfs/{code}/ohlcs"
 HEADERS = {"X-Client-Name": "ft-claw", "Content-Type": "application/json"}
 
 INDEX_CODES = {
@@ -33,6 +35,11 @@ TRADING_SESSIONS = (
     ("09:30", "11:30"),
     ("13:00", "15:00"),
 )
+
+
+def is_etf_code(code: str) -> bool:
+    code6 = str(code or "").upper().split(".", 1)[0]
+    return code6.startswith(("15", "16", "18", "51", "52", "56", "58"))
 
 
 @dataclass(frozen=True)
@@ -77,20 +84,23 @@ class MarketClient:
         self._cache: dict[str, tuple[float, Any]] = {}
 
     def get_stock_prices(self, code: str) -> list[MinutePrice]:
+        if is_etf_code(code):
+            return self._get_prices(f"etf:{code}", ETF_PRICE_URL, code)
         return self._get_prices(f"stock:{code}", STOCK_PRICE_URL, code)
 
     def get_index_prices(self, code: str) -> list[MinutePrice]:
         return self._get_prices(f"index:{code}", INDEX_PRICE_URL, code)
 
     def get_daily_trend(self, code: str) -> dict[str, float | None]:
-        cache_key = f"daily:{code}"
+        cache_key = f"daily:{'etf' if is_etf_code(code) else 'stock'}:{code}"
         now = time.time()
         cached = self._cache.get(cache_key)
         if cached and now - cached[0] < 300:
             return cached[1]
 
         query = urllib.parse.urlencode({"span": "DAY1", "limit": 40})
-        req = urllib.request.Request(f"{STOCK_OHLC_URL.format(code=code)}?{query}", headers=HEADERS)
+        base_url = ETF_OHLC_URL if is_etf_code(code) else STOCK_OHLC_URL
+        req = urllib.request.Request(f"{base_url.format(code=code)}?{query}", headers=HEADERS)
         with safe_urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8"))
 

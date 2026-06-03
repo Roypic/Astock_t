@@ -25,7 +25,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Callable
 
-from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, Security, TModel, load_models
+from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, Security, TModel, is_etf_code, load_models
 from notifier import MultiNotifier, PushPlusNotifier, WeixinPushNotifier
 from net_utils import safe_urlopen
 from weixin_push import default_credentials_path as weixin_credentials_path
@@ -66,6 +66,9 @@ INFO_QUERIES = (
     "东山精密 PCB AI服务器 光模块",
     "福晶科技 激光晶体 光学 光通信",
     "利通电子 PCB 电子元器件 AI服务器",
+    "生益科技 覆铜板 PCB AI服务器",
+    "通信ETF 国泰 CPO 光模块 通信设备",
+    "科创芯片ETF 鹏华 半导体设备 芯片",
     "CPO 光模块 AI算力",
     "PCB AI服务器",
 )
@@ -90,20 +93,41 @@ NEWS_PROFILES = {
         "required": ("利通电子", "利通", "603629"),
         "theme": ("PCB", "AI服务器", "电子元器件", "服务器", "算力"),
     },
+    "生益科技": {
+        "aliases": ("生益科技", "生益", "600183"),
+        "required": ("生益科技", "生益", "600183"),
+        "theme": ("覆铜板", "CCL", "PCB", "AI服务器", "高频高速材料"),
+    },
+    "通信ETF国泰": {
+        "aliases": ("通信ETF国泰", "通信ETF", "国泰通信ETF", "515880"),
+        "required": ("通信ETF", "515880"),
+        "theme": ("CPO", "光模块", "光通信", "通信设备", "AI算力"),
+    },
+    "科创芯片ETF鹏华": {
+        "aliases": ("科创芯片ETF鹏华", "科创芯片ETF", "鹏华科创芯片ETF", "588920"),
+        "required": ("科创芯片ETF", "588920"),
+        "theme": ("半导体", "芯片", "半导体设备", "科创板", "国产替代"),
+    },
 }
 WATCH_CONCEPTS = {
     "剑桥科技": ("CPO/光模块", "AI算力"),
     "东山精密": ("CPO/光模块", "PCB/AI服务器"),
     "福晶科技": ("光学/激光", "光通信"),
     "利通电子": ("算力租赁/算力基础设施", "PCB/AI服务器"),
+    "生益科技": ("PCB/AI服务器", "覆铜板/电子材料"),
+    "通信ETF国泰": ("CPO/光模块", "通信设备"),
+    "科创芯片ETF鹏华": ("半导体/芯片",),
 }
 CONCEPT_KEYWORDS = {
     "CPO/光模块": ("CPO", "光模块", "光通信", "800G", "1.6T"),
     "PCB/AI服务器": ("PCB", "FPC", "AI服务器", "服务器", "高多层板"),
+    "覆铜板/电子材料": ("覆铜板", "CCL", "铜箔", "电子材料", "高频高速材料"),
     "算力租赁/算力基础设施": ("算力租赁", "算力", "智算中心", "数据中心", "云计算"),
     "光学/激光": ("激光晶体", "非线性晶体", "光学", "光通信"),
     "光通信": ("光通信", "光模块", "CPO"),
     "AI算力": ("AI算力", "算力", "数据中心", "CPO"),
+    "通信设备": ("通信设备", "5G", "6G", "通信ETF", "通信"),
+    "半导体/芯片": ("半导体", "芯片", "半导体设备", "集成电路", "国产替代", "晶圆"),
     "有色/贵金属": ("贵金属", "有色", "黄金", "白银", "银", "锌", "铅", "铜", "矿业", "矿山"),
     "锡/小金属": ("锡", "银锡", "小金属", "算力金属", "铟", "锗", "钨", "钼", "稀有金属"),
 }
@@ -121,12 +145,21 @@ CONCEPT_BASKETS = {
     "PCB/AI服务器": (
         ("沪电股份", "002463.XSHE"),
         ("胜宏科技", "300476.XSHE"),
+        ("生益科技", "600183.XSHG"),
         ("生益电子", "688183.XSHG"),
         ("景旺电子", "603228.XSHG"),
         ("世运电路", "603920.XSHG"),
         ("东山精密", "002384.XSHE"),
         ("深南电路", "002916.XSHE"),
         ("鹏鼎控股", "002938.XSHE"),
+    ),
+    "覆铜板/电子材料": (
+        ("生益科技", "600183.XSHG"),
+        ("金安国纪", "002636.XSHE"),
+        ("华正新材", "603186.XSHG"),
+        ("南亚新材", "688519.XSHG"),
+        ("建滔积层板", "01888.HK"),
+        ("超声电子", "000823.XSHE"),
     ),
     "算力租赁/算力基础设施": (
         ("鸿博股份", "002229.XSHE"),
@@ -153,6 +186,24 @@ CONCEPT_BASKETS = {
         ("天孚通信", "300394.XSHE"),
         ("剑桥科技", "603083.XSHG"),
         ("博创科技", "300548.XSHE"),
+    ),
+    "通信设备": (
+        ("中兴通讯", "000063.XSHE"),
+        ("工业富联", "601138.XSHG"),
+        ("中际旭创", "300308.XSHE"),
+        ("新易盛", "300502.XSHE"),
+        ("天孚通信", "300394.XSHE"),
+        ("光迅科技", "002281.XSHE"),
+        ("剑桥科技", "603083.XSHG"),
+    ),
+    "半导体/芯片": (
+        ("中芯国际", "688981.XSHG"),
+        ("寒武纪", "688256.XSHG"),
+        ("海光信息", "688041.XSHG"),
+        ("澜起科技", "688008.XSHG"),
+        ("中微公司", "688012.XSHG"),
+        ("沪硅产业", "688126.XSHG"),
+        ("芯原股份", "688521.XSHG"),
     ),
     "AI算力": (
         ("中际旭创", "300308.XSHE"),
@@ -197,6 +248,11 @@ STOCK_CODE_HINTS = {
     "东山精密": "002384.SZ",
     "福晶科技": "002222.SZ",
     "利通电子": "603629.SH",
+    "生益科技": "600183.SH",
+    "通信ETF国泰": "515880.SH",
+    "通信ETF": "515880.SH",
+    "科创芯片ETF鹏华": "588920.SH",
+    "科创芯片ETF": "588920.SH",
     "兴业银锡": "000426.SZ",
     "兴业银": "000426.SZ",
 }
@@ -204,6 +260,9 @@ RESEARCH_PEERS = {
     "002428.SZ": ("600497.SH", "000060.SZ", "600206.SH", "600362.SH"),
     "603629.SH": ("002463.SZ", "600183.SH", "002916.SZ", "603228.SH", "002938.SZ"),
     "000426.SZ": ("000960.SZ", "000975.SZ", "000603.SZ", "600547.SH", "600489.SH", "600988.SH", "601899.SH", "601168.SH"),
+    "600183.SH": ("002463.SZ", "002916.SZ", "603228.SH", "300476.SZ", "002384.SZ", "002938.SZ"),
+    "515880.SH": ("300308.SZ", "300502.SZ", "300394.SZ", "002281.SZ", "603083.SH", "601138.SH"),
+    "588920.SH": ("688981.SH", "688256.SH", "688041.SH", "688008.SH", "688012.SH", "688126.SH"),
 }
 RESEARCH_THEMES = {
     "002428.SZ": ("锗", "红外光学", "光纤级锗", "光伏级锗", "磷化铟", "砷化镓", "化合物半导体"),
@@ -213,6 +272,9 @@ RESEARCH_THEMES = {
     "002222.SZ": ("激光晶体", "非线性晶体", "光通信", "光学元件", "半导体设备"),
     "603773.SH": ("玻璃基板", "TGV", "Mini LED", "显示面板", "先进封装", "光电显示", "电子玻璃"),
     "000426.SZ": ("白银", "锡", "铅锌", "贵金属", "有色金属", "矿山资产", "银漫矿业", "资源储量", "金属价格"),
+    "600183.SH": ("覆铜板", "CCL", "PCB", "AI服务器", "高速材料", "铜箔", "电子材料"),
+    "515880.SH": ("通信ETF", "CPO", "光模块", "光通信", "通信设备", "AI算力", "数据中心"),
+    "588920.SH": ("科创芯片ETF", "半导体", "芯片", "半导体设备", "国产替代", "科创板"),
 }
 GLOBAL_RESEARCH_PEERS = {
     "002428.SZ": (
@@ -585,7 +647,7 @@ class MonitorApp:
         self.weixin_mode_var = tk.StringVar(value="weixin")
         self.model_path_var = tk.StringVar(value=str(self.models_dir))
         self.interval_var = tk.StringVar(value=str(DEFAULT_INTERVAL_SECONDS))
-        self.news_watchlist_var = tk.StringVar(value="剑桥科技，东山精密，福晶科技，利通电子，锡业股份，沃格光电")
+        self.news_watchlist_var = tk.StringVar(value="剑桥科技，东山精密，福晶科技，利通电子，锡业股份，沃格光电，生益科技，通信ETF国泰，科创芯片ETF鹏华")
         self.info_alert_var = tk.BooleanVar(value=True)
         self.market_alert_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="未启动")
@@ -1545,7 +1607,8 @@ class MonitorApp:
     def _fetch_ohlc_chart_rows(self, ft_code: str, period: str) -> list[dict[str, float | str]]:
         span = {"日线": "DAY1", "周线": "WEEK1", "月线": "MONTH1"}.get(period, "DAY1")
         query = urllib.parse.urlencode({"span": span, "limit": 160})
-        url = f"https://market.ft.tech/app/api/v2/stocks/{urllib.parse.quote(ft_code)}/ohlcs?{query}"
+        security_kind = "etfs" if is_etf_code(ft_code) else "stocks"
+        url = f"https://market.ft.tech/app/api/v2/{security_kind}/{urllib.parse.quote(ft_code)}/ohlcs?{query}"
         req = urllib.request.Request(url, headers={"X-Client-Name": "ft-claw", "Content-Type": "application/json"})
         with safe_urlopen(req, timeout=12) as resp:
             data = json.loads(resp.read().decode("utf-8"))

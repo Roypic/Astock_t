@@ -13,16 +13,20 @@ from itertools import product
 from pathlib import Path
 from typing import Any
 
-from model_engine import HEADERS, INDEX_CODES, TModel, load_models
+from model_engine import HEADERS, INDEX_CODES, TModel, is_etf_code, load_models
 
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 STOCK_PRICE_URL = "https://market.ft.tech/app/api/v2/stocks/{code}/prices"
+ETF_PRICE_URL = "https://market.ft.tech/app/api/v2/etfs/{code}/prices"
 INDEX_PRICE_URL = "https://market.ft.tech/app/api/v2/indices/{code}/prices"
 
 
 def fetch_prices(code: str, is_index: bool = False, since: str = "TRADE_DAYS_AGO(31)") -> list[dict[str, Any]]:
-    base = INDEX_PRICE_URL if is_index else STOCK_PRICE_URL
+    if is_index:
+        base = INDEX_PRICE_URL
+    else:
+        base = ETF_PRICE_URL if is_etf_code(code) else STOCK_PRICE_URL
     query = urllib.parse.urlencode({"since": since})
     req = urllib.request.Request(f"{base.format(code=code)}?{query}", headers=HEADERS)
     with urllib.request.urlopen(req, timeout=20) as resp:
