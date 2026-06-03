@@ -101,6 +101,8 @@ CONCEPT_KEYWORDS = {
     "光学/激光": ("激光晶体", "非线性晶体", "光学", "光通信"),
     "光通信": ("光通信", "光模块", "CPO"),
     "AI算力": ("AI算力", "算力", "数据中心", "CPO"),
+    "有色/贵金属": ("贵金属", "有色", "黄金", "白银", "银", "锌", "铅", "铜", "矿业", "矿山"),
+    "锡/小金属": ("锡", "银锡", "小金属", "算力金属", "铟", "锗", "钨", "钼", "稀有金属"),
 }
 CONCEPT_BASKETS = {
     "CPO/光模块": (
@@ -157,6 +159,26 @@ CONCEPT_BASKETS = {
         ("沪电股份", "002463.XSHE"),
         ("胜宏科技", "300476.XSHE"),
     ),
+    "有色/贵金属": (
+        ("山东黄金", "600547.XSHG"),
+        ("中金黄金", "600489.XSHG"),
+        ("紫金矿业", "601899.XSHG"),
+        ("赤峰黄金", "600988.XSHG"),
+        ("银泰黄金", "000975.XSHE"),
+        ("盛达资源", "000603.XSHE"),
+        ("西部矿业", "601168.XSHG"),
+        ("兴业银锡", "000426.XSHE"),
+    ),
+    "锡/小金属": (
+        ("锡业股份", "000960.XSHE"),
+        ("兴业银锡", "000426.XSHE"),
+        ("云南锗业", "002428.XSHE"),
+        ("驰宏锌锗", "600497.XSHG"),
+        ("华锡有色", "600301.XSHG"),
+        ("章源钨业", "002378.XSHE"),
+        ("洛阳钼业", "603993.XSHG"),
+        ("厦门钨业", "600549.XSHG"),
+    ),
 }
 STOCK_CODE_HINTS = {
     "云南锗业": "002428.SZ",
@@ -172,10 +194,13 @@ STOCK_CODE_HINTS = {
     "东山精密": "002384.SZ",
     "福晶科技": "002222.SZ",
     "利通电子": "603629.SH",
+    "兴业银锡": "000426.SZ",
+    "兴业银": "000426.SZ",
 }
 RESEARCH_PEERS = {
     "002428.SZ": ("600497.SH", "000060.SZ", "600206.SH", "600362.SH"),
     "603629.SH": ("002463.SZ", "600183.SH", "002916.SZ", "603228.SH", "002938.SZ"),
+    "000426.SZ": ("000960.SZ", "000975.SZ", "000603.SZ", "600547.SH", "600489.SH", "600988.SH", "601899.SH", "601168.SH"),
 }
 RESEARCH_THEMES = {
     "002428.SZ": ("锗", "红外光学", "光纤级锗", "光伏级锗", "磷化铟", "砷化镓", "化合物半导体"),
@@ -184,6 +209,7 @@ RESEARCH_THEMES = {
     "603083.SH": ("CPO", "光模块", "光通信", "数据中心", "AI算力"),
     "002222.SZ": ("激光晶体", "非线性晶体", "光通信", "光学元件", "半导体设备"),
     "603773.SH": ("玻璃基板", "TGV", "Mini LED", "显示面板", "先进封装", "光电显示", "电子玻璃"),
+    "000426.SZ": ("白银", "锡", "铅锌", "贵金属", "有色金属", "矿山资产", "银漫矿业", "资源储量", "金属价格"),
 }
 GLOBAL_RESEARCH_PEERS = {
     "002428.SZ": (
@@ -205,6 +231,13 @@ GLOBAL_RESEARCH_PEERS = {
         ("Unimicron", "3037.TW", "封装基板/高阶 PCB"),
         ("Compeq", "2313.TW", "通信和消费电子 PCB"),
         ("Ibiden", "4062.T", "高端封装基板"),
+    ),
+    "000426.SZ": (
+        ("Pan American Silver", "PAAS", "全球白银矿业公司，白银价格弹性可比"),
+        ("First Majestic Silver", "AG", "白银矿山资产和白银价格 beta"),
+        ("Hecla Mining", "HL", "美国白银/黄金矿业公司"),
+        ("Fresnillo", "FRES.L", "墨西哥大型白银和黄金矿商"),
+        ("Boliden", "BOL.ST", "欧洲锌/铜/铅/贵金属综合矿业"),
     ),
 }
 GLOBAL_THEME_PEERS = {
@@ -238,6 +271,18 @@ GLOBAL_THEME_PEERS = {
         ("Arista Networks", "ANET", "AI数据中心交换网络"),
         ("Vertiv", "VRT", "数据中心供电和散热"),
     ),
+    "有色/贵金属": (
+        ("Newmont", "NEM", "全球黄金矿业龙头"),
+        ("Barrick Gold", "GOLD", "全球黄金矿业龙头"),
+        ("Pan American Silver", "PAAS", "白银矿业可比"),
+        ("Fresnillo", "FRES.L", "白银/黄金矿山"),
+    ),
+    "锡/小金属": (
+        ("Alphamin Resources", "AFM.V", "高品位锡矿资产"),
+        ("Metals X", "MLX.AX", "锡矿生产商"),
+        ("5N Plus", "VNP.TO", "高纯小金属和电子材料"),
+        ("Teck Resources", "TECK", "综合有色资源平台"),
+    ),
 }
 TAM_FRAMEWORKS = {
     "002428.SZ": (
@@ -249,6 +294,11 @@ TAM_FRAMEWORKS = {
         "PCB 的 TAM 来自全球电子制造基座，AI服务器/交换机/高速互连把普通 PCB 需求推向高多层、高频高速、高可靠性。",
         "TAM 判断重点：AI服务器出货、英伟达/ASIC 服务器平台迭代、800G/1.6T 交换机、服务器电源和散热结构升级。",
         "落地指标：高多层板订单、AI服务器客户认证、服务器/通信占比、毛利率是否向高端 PCB 靠拢。",
+    ),
+    "000426.SZ": (
+        "资源股 TAM 不看传统意义单一终端市场，而看金属价格、资源储量、品位、采选成本和扩产节奏共同决定的利润弹性。",
+        "兴业银锡的核心变量是白银/锡/铅锌价格、银漫矿业等主力矿体产量、单位成本和全球贵金属风险偏好。",
+        "落地指标：银价/锡价走势、矿山产量和品位、资源储量更新、成本曲线位置、并购资产是否增厚净利润。",
     ),
 }
 NEWS_THEME_TERMS = (
@@ -1741,11 +1791,11 @@ class MonitorApp:
         sector_info: dict[str, object] | None = None,
     ) -> tuple[tuple[str, ...], str, tuple[str, ...]]:
         normalized_code = self._normalize_market_symbol(code)
-        if normalized_code in RESEARCH_PEERS:
-            return RESEARCH_PEERS[normalized_code], "内置高置信同行池", tuple()
-
         profile = self._news_profile_for_query(name) or {"theme": tuple(themes), "aliases": (name,), "required": (name,)}
         concepts = self._concepts_for_watch(name, profile, sector_info)
+        if normalized_code in RESEARCH_PEERS:
+            return RESEARCH_PEERS[normalized_code], "内置高置信同行池", concepts
+
         ft_code = self._to_ft_stock_code(normalized_code) if normalized_code else ""
         peers = list(self._concept_peers(concepts, ft_code))
 
@@ -2140,6 +2190,15 @@ class MonitorApp:
             "002916.SZ": "封装基板/通信 PCB",
             "603228.SH": "PCB制造/汽车与服务器链",
             "002938.SZ": "消费电子/FPC/高端 PCB",
+            "000426.SZ": "白银/锡/铅锌矿山资源",
+            "000960.SZ": "锡资源/锡冶炼龙头",
+            "000975.SZ": "黄金矿山/贵金属",
+            "000603.SZ": "白银/铅锌资源",
+            "600547.SH": "黄金矿业龙头",
+            "600489.SH": "黄金矿业/央企资源",
+            "600988.SH": "黄金矿山弹性标的",
+            "601899.SH": "全球铜金综合矿业",
+            "601168.SH": "铜铅锌/有色矿业",
         }
         return mapping.get(symbol, "有色/材料可比")
 
@@ -3760,6 +3819,8 @@ class MonitorApp:
             "CPO/光模块": ("共封装光学", "光模块", "CPO", "硅光"),
             "PCB/AI服务器": ("PCB", "印制电路板", "服务器", "英伟达概念"),
             "AI算力": ("人工智能", "AI", "算力", "英伟达"),
+            "有色/贵金属": ("贵金属", "有色", "黄金", "白银", "银", "矿业", "矿山"),
+            "锡/小金属": ("锡", "银锡", "小金属", "稀有金属", "算力金属"),
         }
         for concept, words in extra_rules.items():
             if any(word in text for word in words):
