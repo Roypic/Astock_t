@@ -20,6 +20,8 @@ from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -39,6 +41,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui_monitor import MonitorApp as LegacyMonitorApp
+from gui_monitor import create_windows_desktop_shortcut
 from model_engine import BEIJING_TZ, ModelSignalEngine, TModel, load_models
 from notifier import MultiNotifier, PushPlusNotifier, WeixinPushNotifier
 from weixin_push import default_credentials_path as weixin_credentials_path
@@ -156,6 +160,14 @@ class MonitorWindow(QMainWindow):
         self.worker: threading.Thread | None = None
         self.weixin_session_stop = threading.Event()
         self.weixin_session_worker: threading.Thread | None = None
+        self.seen_intraday_news: set[str] = set()
+        self.seen_rumor_events: dict[str, dict[str, object]] = {}
+        self.seen_market_alerts: set[str] = set()
+        self.market_alert_states: dict[str, dict[str, object]] = {}
+        self.sector_info_cache: dict[str, tuple[float, dict[str, object]]] = {}
+        self.concept_board_cache: tuple[float, list[dict[str, object]]] | None = None
+        self.news_monitor_started_at = None
+        self.child_windows: list[QWidget] = []
         self.models_dir = ensure_default_models()
 
         self._build_ui()
@@ -295,6 +307,25 @@ class MonitorWindow(QMainWindow):
         actions.layout.addWidget(hint)
         top.addWidget(actions, 1)
         page.addLayout(top)
+
+        feature_card = GlassCard("功能区", "和 v1 对齐的分析、消息面、雷达、走势和研报入口")
+        feature_grid = QGridLayout()
+        feature_grid.setSpacing(10)
+        feature_buttons: list[tuple[str, Any, str]] = [
+            ("模型盘前", self._show_premarket_analysis, "ghost"),
+            ("信息面盘前", self._show_info_premarket, "ghost"),
+            ("自选信息面", self._open_custom_info_window, "ghost"),
+            ("小作文雷达", self._open_rumor_radar_window, "ghost"),
+            ("自选走势", self._open_watch_chart_window, "ghost"),
+            ("AI研报", self._open_research_report_window, "ghost"),
+            ("桌面图标", self._create_desktop_shortcut, "ghost"),
+        ]
+        for idx, (text, callback, kind) in enumerate(feature_buttons):
+            button = ModernButton(text, kind)
+            button.clicked.connect(callback)
+            feature_grid.addWidget(button, idx // 4, idx % 4)
+        feature_card.layout.addLayout(feature_grid)
+        page.addWidget(feature_card)
 
         self.table = QTableWidget(0, 10)
         self.table.setObjectName("signalTable")
@@ -659,6 +690,193 @@ class MonitorWindow(QMainWindow):
 
         threading.Thread(target=worker, daemon=True).start()
 
+    def _open_text_window(self, title: str, content: str, width: int = 920, height: int = 680) -> QTextEdit:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(width, height)
+        layout = QVBoxLayout(dialog)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(content)
+        text.setObjectName("reportText")
+        layout.addWidget(text)
+        dialog.setStyleSheet(
+            """
+            QDialog {
+                background: #edf7ff;
+            }
+            QTextEdit#reportText {
+                background: rgba(251, 253, 255, 240);
+                border: 1px solid rgba(255,255,255,230);
+                border-radius: 18px;
+                padding: 14px;
+                color: #172437;
+                font-family: "Microsoft YaHei UI";
+                font-size: 13px;
+            }
+            """
+        )
+        dialog.show()
+        self.child_windows.append(dialog)
+        return text
+
+    def _show_premarket_analysis(self) -> None:
+        model_path = Path(self.model_path.text().strip())
+        if not model_path.exists():
+            QMessageBox.warning(self, "模型不存在", "请选择模型 JSON 文件或模型文件夹。")
+            return
+        try:
+            analysis = self._build_premarket_analysis(model_path)
+            self._open_text_window("模型盘前", analysis)
+            self._log("已生成模型盘前分析")
+        except Exception as exc:
+            QMessageBox.critical(self, "盘前分析失败", str(exc))
+
+    def _show_info_premarket(self) -> None:
+        self.status_value.setText("信息面盘前")
+        self._log("正在获取信息面盘前摘要")
+
+        def worker() -> None:
+            try:
+                self.queue.put(("text_window", ("信息面盘前", self._build_info_premarket())))
+                self.queue.put(("log", "信息面盘前摘要已生成"))
+            except Exception as exc:
+                self.queue.put(("error", f"信息面盘前失败：{exc}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _open_custom_info_window(self) -> None:
+        self._open_query_window(
+            title="自选信息面",
+            default_query="东山精密",
+            action_label="搜索",
+            extra_label="天数",
+            extra_default="3",
+            builder=lambda query, extra: self._build_custom_info_report(query, max(1, min(14, int(extra or 3))), broad=True),
+        )
+
+    def _open_rumor_radar_window(self) -> None:
+        self._open_query_window(
+            title="小作文雷达",
+            default_query=self.watchlist.text(),
+            action_label="扫描",
+            extra_label="小时",
+            extra_default="8",
+            builder=lambda query, extra: self._build_rumor_radar_report(query, max(1, min(48, int(extra or 8)))),
+        )
+
+    def _open_research_report_window(self) -> None:
+        self._open_query_window(
+            title="AI研报",
+            default_query="云南锗业",
+            action_label="生成研报",
+            extra_label="",
+            extra_default="",
+            builder=lambda query, _extra: self._build_research_report(query),
+        )
+
+    def _open_watch_chart_window(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("自选走势")
+        dialog.resize(980, 720)
+        layout = QVBoxLayout(dialog)
+        bar = QHBoxLayout()
+        query = QLineEdit("剑桥科技")
+        period = QComboBox()
+        period.addItems(["分时", "日线", "周线", "月线"])
+        period.setCurrentText("日线")
+        run = ModernButton("查看走势", "primary")
+        bar.addWidget(QLabel("股票"))
+        bar.addWidget(query, 1)
+        bar.addWidget(period)
+        bar.addWidget(run)
+        layout.addLayout(bar)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText("输入股票后点击查看走势。v2 当前展示支撑/压力/筹码/盘口摘要，图形渲染会继续对齐 v1。")
+        layout.addWidget(text)
+
+        def execute() -> None:
+            q = query.text().strip()
+            if not q:
+                QMessageBox.warning(dialog, "缺少股票", "请输入股票名称或代码。")
+                return
+            text.setPlainText("正在获取走势数据...")
+
+            def worker() -> None:
+                try:
+                    payload = self._build_chart_payload(q, period.currentText())
+                    content = self._chart_summary_text(payload)
+                    self.queue.put(("set_text", (text, content)))
+                except Exception as exc:
+                    self.queue.put(("set_text", (text, f"走势获取失败：{exc}")))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        run.clicked.connect(execute)
+        query.returnPressed.connect(execute)
+        dialog.show()
+        self.child_windows.append(dialog)
+
+    def _open_query_window(
+        self,
+        title: str,
+        default_query: str,
+        action_label: str,
+        extra_label: str,
+        extra_default: str,
+        builder: Any,
+    ) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.resize(920, 680)
+        layout = QVBoxLayout(dialog)
+        bar = QHBoxLayout()
+        query = QLineEdit(default_query)
+        extra = QLineEdit(extra_default)
+        extra.setFixedWidth(76)
+        run = ModernButton(action_label, "primary")
+        bar.addWidget(QLabel("关键词"))
+        bar.addWidget(query, 1)
+        if extra_label:
+            bar.addWidget(QLabel(extra_label))
+            bar.addWidget(extra)
+        bar.addWidget(run)
+        layout.addLayout(bar)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        layout.addWidget(text)
+
+        def execute() -> None:
+            q = query.text().strip()
+            if not q:
+                QMessageBox.warning(dialog, "缺少输入", "请输入股票名、代码或关键词。")
+                return
+            text.setPlainText("正在处理，请稍候...")
+
+            def worker() -> None:
+                try:
+                    content = builder(q, extra.text().strip())
+                    self.queue.put(("set_text", (text, content)))
+                except Exception as exc:
+                    self.queue.put(("set_text", (text, f"{title}失败：{exc}")))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        run.clicked.connect(execute)
+        query.returnPressed.connect(execute)
+        dialog.show()
+        self.child_windows.append(dialog)
+
+    def _create_desktop_shortcut(self) -> None:
+        try:
+            shortcut = create_windows_desktop_shortcut()
+            self._log(f"桌面图标已创建：{shortcut}")
+            QMessageBox.information(self, "桌面图标", f"已创建桌面图标：\n{shortcut}")
+        except Exception as exc:
+            self._log(f"桌面图标创建失败：{exc}")
+            QMessageBox.critical(self, "桌面图标创建失败", str(exc))
+
     def _start_weixin_login(self) -> None:
         self.weixin_mode.setText("weixin")
         self.weixin_session_stop.clear()
@@ -701,6 +919,14 @@ class MonitorWindow(QMainWindow):
                 self._log(str(payload))
             elif kind == "risk":
                 self.risk_summary.setText(str(payload) + "。历史回测不代表未来收益，请小心使用。")
+            elif kind == "text_window":
+                title, content = payload if isinstance(payload, tuple) else ("信息", str(payload))
+                self._open_text_window(str(title), str(content))
+            elif kind == "set_text":
+                if isinstance(payload, tuple) and len(payload) == 2:
+                    widget, content = payload
+                    if hasattr(widget, "setPlainText"):
+                        widget.setPlainText(str(content))
             elif kind == "error":
                 self.status_value.setText("错误")
                 self._log(str(payload))
@@ -764,6 +990,13 @@ class MonitorWindow(QMainWindow):
         self.stop_event.set()
         self.weixin_session_stop.set()
         super().closeEvent(event)
+
+
+for _legacy_name, _legacy_value in LegacyMonitorApp.__dict__.items():
+    if _legacy_name.startswith("__"):
+        continue
+    if callable(_legacy_value) and not hasattr(MonitorWindow, _legacy_name):
+        setattr(MonitorWindow, _legacy_name, _legacy_value)
 
 
 def main() -> None:
