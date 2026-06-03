@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install PyInstaller
-        run: python -m pip install --upgrade pip pyinstaller certifi
+        run: python -m pip install --upgrade pip pyinstaller certifi PySide6
 
       - name: Write build info
         working-directory: backend
@@ -37,12 +37,14 @@ jobs:
           --windowed
           --name AShareTSignalMonitor
           --add-data "models:models"
-          --hidden-import tkinter
           --hidden-import certifi
-          --collect-submodules tkinter
+          --hidden-import PySide6.QtCore
+          --hidden-import PySide6.QtGui
+          --hidden-import PySide6.QtWidgets
           --collect-data certifi
+          --collect-all PySide6
           --clean
-          gui_monitor.py
+          qt_monitor.py
 
       - name: Build macOS console binary for diagnostics
         working-directory: backend
@@ -52,12 +54,14 @@ jobs:
           --console
           --name AShareTSignalMonitor-cli
           --add-data "models:models"
-          --hidden-import tkinter
           --hidden-import certifi
-          --collect-submodules tkinter
+          --hidden-import PySide6.QtCore
+          --hidden-import PySide6.QtGui
+          --hidden-import PySide6.QtWidgets
           --collect-data certifi
+          --collect-all PySide6
           --clean
-          gui_monitor.py
+          qt_monitor.py
 
       - name: Package app with terminal launcher
         working-directory: backend/dist

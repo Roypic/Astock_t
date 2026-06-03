@@ -24,7 +24,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install PyInstaller
-        run: python -m pip install --upgrade pip pyinstaller certifi
+        run: python -m pip install --upgrade pip pyinstaller certifi PySide6
 
       - name: Write build info
         working-directory: backend
@@ -39,9 +39,13 @@ jobs:
           --name AShareTSignalMonitor
           --add-data "models;models"
           --hidden-import certifi
+          --hidden-import PySide6.QtCore
+          --hidden-import PySide6.QtGui
+          --hidden-import PySide6.QtWidgets
           --collect-data certifi
+          --collect-all PySide6
           --clean
-          gui_monitor.py
+          qt_monitor.py
 
       - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
