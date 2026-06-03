@@ -469,8 +469,18 @@ class MonitorApp:
         style.map("Treeview", background=[("selected", COLORS["sage"])], foreground=[("selected", "#FFFFFF")])
 
     def _build_ui(self) -> None:
-        outer = ttk.Frame(self.root, padding=18)
-        outer.pack(fill=tk.BOTH, expand=True)
+        shell = ttk.Frame(self.root)
+        shell.pack(fill=tk.BOTH, expand=True)
+        self.main_canvas = tk.Canvas(shell, bg=COLORS["bg"], highlightthickness=0)
+        main_scrollbar = ttk.Scrollbar(shell, orient=tk.VERTICAL, command=self.main_canvas.yview)
+        self.main_canvas.configure(yscrollcommand=main_scrollbar.set)
+        main_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.main_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        outer = ttk.Frame(self.main_canvas, padding=18)
+        self.main_window_id = self.main_canvas.create_window((0, 0), window=outer, anchor=tk.NW)
+        outer.bind("<Configure>", self._update_main_scrollregion)
+        self.main_canvas.bind("<Configure>", self._resize_main_window)
 
         header = ttk.Frame(outer)
         header.pack(fill=tk.X, pady=(0, 14))
@@ -608,7 +618,12 @@ class MonitorApp:
         table_card = ttk.Frame(outer, style="Card.TFrame", padding=12)
         table_card.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
         ttk.Label(table_card, text="监控列表", style="CardTitle.TLabel").pack(anchor=tk.W, pady=(0, 8))
-        self.table = ttk.Treeview(table_card, columns=columns, show="headings", height=10)
+        table_body = ttk.Frame(table_card, style="Card.TFrame")
+        table_body.pack(fill=tk.BOTH, expand=True)
+        self.table = ttk.Treeview(table_body, columns=columns, show="headings", height=8)
+        table_y = ttk.Scrollbar(table_body, orient=tk.VERTICAL, command=self.table.yview)
+        table_x = ttk.Scrollbar(table_body, orient=tk.HORIZONTAL, command=self.table.xview)
+        self.table.configure(yscrollcommand=table_y.set, xscrollcommand=table_x.set)
         headings = {
             "symbol": "股票",
             "code": "代码",
@@ -640,14 +655,20 @@ class MonitorApp:
         self.table.tag_configure("odd", background="#F8F1E6")
         self.table.tag_configure("signal", background="#FBE3DA", foreground=COLORS["coral_dark"])
         self.table.tag_configure("error", background="#F5DDDD", foreground=COLORS["danger"])
-        self.table.pack(fill=tk.BOTH, expand=True)
+        self.table.grid(row=0, column=0, sticky=tk.NSEW)
+        table_y.grid(row=0, column=1, sticky=tk.NS)
+        table_x.grid(row=1, column=0, sticky=tk.EW)
+        table_body.columnconfigure(0, weight=1)
+        table_body.rowconfigure(0, weight=1)
 
         log_frame = ttk.Frame(outer, style="Card.TFrame", padding=12)
         log_frame.pack(fill=tk.BOTH, expand=True)
         ttk.Label(log_frame, text="运行日志 / 信号", style="CardTitle.TLabel").pack(anchor=tk.W, pady=(0, 8))
+        log_body = ttk.Frame(log_frame, style="Card.TFrame")
+        log_body.pack(fill=tk.BOTH, expand=True)
         self.log = tk.Text(
-            log_frame,
-            height=9,
+            log_body,
+            height=7,
             wrap=tk.WORD,
             bg="#2F3834",
             fg="#F9F4E8",
@@ -657,7 +678,40 @@ class MonitorApp:
             pady=10,
             font=("Cascadia Mono", 10),
         )
-        self.log.pack(fill=tk.BOTH, expand=True)
+        log_scroll = ttk.Scrollbar(log_body, orient=tk.VERTICAL, command=self.log.yview)
+        self.log.configure(yscrollcommand=log_scroll.set)
+        self.log.grid(row=0, column=0, sticky=tk.NSEW)
+        log_scroll.grid(row=0, column=1, sticky=tk.NS)
+        log_body.columnconfigure(0, weight=1)
+        log_body.rowconfigure(0, weight=1)
+        self._bind_main_scroll(outer)
+
+    def _update_main_scrollregion(self, _event: tk.Event | None = None) -> None:
+        if hasattr(self, "main_canvas"):
+            self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all"))
+
+    def _resize_main_window(self, event: tk.Event) -> None:
+        if hasattr(self, "main_canvas") and hasattr(self, "main_window_id"):
+            self.main_canvas.itemconfigure(self.main_window_id, width=event.width)
+
+    def _bind_main_scroll(self, widget: tk.Widget) -> None:
+        widget.bind("<MouseWheel>", self._on_main_mousewheel, add="+")
+        widget.bind("<Button-4>", self._on_main_mousewheel, add="+")
+        widget.bind("<Button-5>", self._on_main_mousewheel, add="+")
+        for child in widget.winfo_children():
+            self._bind_main_scroll(child)
+
+    def _on_main_mousewheel(self, event: tk.Event) -> None:
+        widget = event.widget
+        if isinstance(widget, (tk.Text, ttk.Treeview)):
+            return
+        delta = getattr(event, "delta", 0)
+        if delta:
+            units = -1 * int(delta / 120)
+        else:
+            units = -1 if getattr(event, "num", None) == 4 else 1
+        if hasattr(self, "main_canvas"):
+            self.main_canvas.yview_scroll(units, "units")
 
     def _animate_mascot(self) -> None:
         if not hasattr(self, "mascot"):
