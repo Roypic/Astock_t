@@ -45,6 +45,7 @@ GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 BING_SEARCH_URL = "https://cn.bing.com/search"
 EASTMONEY_SEARCH_URL = "https://searchapi.eastmoney.com/api/suggest/get"
 EASTMONEY_STOCK_INFO_URL = "https://push2.eastmoney.com/api/qt/stock/get"
+EASTMONEY_QUOTE_DEPTH_FIELDS = "f19,f20,f17,f18,f15,f16,f13,f14,f11,f12,f39,f40,f37,f38,f35,f36,f33,f34,f31,f32"
 EASTMONEY_STOCK_SECTORS_URL = "https://push2.eastmoney.com/api/qt/slist/get"
 EASTMONEY_CONCEPT_BOARDS_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/latest"
@@ -1357,7 +1358,7 @@ class MonitorApp:
 
         canvas = tk.Canvas(window, bg=COLORS["card"], highlightthickness=0)
         canvas.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
-        summary = tk.Text(window, height=5, wrap=tk.WORD, bg=COLORS["card_soft"], fg=COLORS["text"], relief=tk.FLAT, padx=12, pady=10, font=("Microsoft YaHei UI", 9))
+        summary = tk.Text(window, height=10, wrap=tk.WORD, bg=COLORS["card_soft"], fg=COLORS["text"], relief=tk.FLAT, padx=12, pady=10, font=("Microsoft YaHei UI", 9))
         summary.pack(fill=tk.X, padx=14, pady=(0, 8))
         tk.Label(window, textvariable=status_var, bg=COLORS["bg"], fg=COLORS["muted"], anchor=tk.W, font=("Microsoft YaHei UI", 9)).pack(fill=tk.X, padx=16, pady=(0, 10))
 
@@ -1369,7 +1370,7 @@ class MonitorApp:
             status_var.set("正在获取走势数据...")
             summary.configure(state=tk.NORMAL)
             summary.delete("1.0", tk.END)
-            summary.insert(tk.END, "正在计算支撑、压力和筹码峰...\n")
+            summary.insert(tk.END, "正在计算多级支撑/压力、筹码密集区、量价状态和盘口深度...\n")
             summary.configure(state=tk.DISABLED)
             canvas.delete("all")
 
@@ -1397,9 +1398,10 @@ class MonitorApp:
         if len(rows) < 2:
             raise RuntimeError("走势数据不足，可能非交易时间或接口暂时无数据。")
         levels = self._chart_levels(rows)
+        order_book = self._fetch_order_book(code)
         info = self._fetch_security_info(code)
         name = str(info.get("symbol_name") or query)
-        return {"query": query, "name": name, "code": code, "period": period, "rows": rows, "levels": levels}
+        return {"query": query, "name": name, "code": code, "period": period, "rows": rows, "levels": levels, "order_book": order_book}
 
     def _to_ft_stock_code(self, code: str) -> str:
         upper = code.upper()
@@ -1449,30 +1451,85 @@ class MonitorApp:
             rows.append({"label": label, "close": close, "high": float(item.get("h") or close), "low": float(item.get("l") or close), "volume": float(item.get("v") or 1)})
         return rows
 
-    def _chart_levels(self, rows: list[dict[str, float | str]]) -> dict[str, float]:
+    def _fetch_order_book(self, code: str) -> dict[str, object]:
+        secid, _code6 = self._eastmoney_secid(code)
+        params = urllib.parse.urlencode(
+            {
+                "secid": secid,
+                "fields": EASTMONEY_QUOTE_DEPTH_FIELDS,
+                "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+            }
+        )
+        try:
+            req = urllib.request.Request(
+                f"{EASTMONEY_STOCK_INFO_URL}?{params}",
+                headers={"User-Agent": "Mozilla/5.0 AShareTSignalMonitor/1.0", "Accept": "application/json"},
+            )
+            with safe_urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            row = data.get("data") if isinstance(data, dict) else {}
+            if not isinstance(row, dict):
+                return {"status": "empty", "message": "盘口接口未返回数据。"}
+            bid_pairs = (("买一", "f19", "f20"), ("买二", "f17", "f18"), ("买三", "f15", "f16"), ("买四", "f13", "f14"), ("买五", "f11", "f12"))
+            ask_pairs = (("卖一", "f39", "f40"), ("卖二", "f37", "f38"), ("卖三", "f35", "f36"), ("卖四", "f33", "f34"), ("卖五", "f31", "f32"))
+
+            def collect(pairs: tuple[tuple[str, str, str], ...]) -> list[dict[str, float | str]]:
+                levels = []
+                for label, price_key, volume_key in pairs:
+                    price = self._safe_float(row.get(price_key))
+                    volume = self._safe_float(row.get(volume_key))
+                    if price and price > 0:
+                        levels.append({"label": label, "price": price, "volume": volume or 0.0})
+                return levels
+
+            bids = collect(bid_pairs)
+            asks = collect(ask_pairs)
+            if not bids and not asks:
+                return {"status": "empty", "message": "盘口为空，可能是非交易时段、停牌，或公开接口未提供实时挂单。"}
+            bid_amount = sum(float(item["price"]) * float(item.get("volume") or 0) for item in bids)
+            ask_amount = sum(float(item["price"]) * float(item.get("volume") or 0) for item in asks)
+            total = bid_amount + ask_amount
+            imbalance = (bid_amount - ask_amount) / total if total else 0.0
+            spread = float(asks[0]["price"]) - float(bids[0]["price"]) if bids and asks else None
+            return {
+                "status": "ok",
+                "bids": bids,
+                "asks": asks,
+                "bid_amount": bid_amount,
+                "ask_amount": ask_amount,
+                "imbalance": imbalance,
+                "spread": spread,
+                "message": "公开接口仅返回五档盘口；千档/Level-2 深度若券商或数据源未授权，无法完整拉取。",
+            }
+        except Exception as exc:
+            return {"status": "error", "message": f"盘口读取失败：{exc}"}
+
+    def _chart_levels(self, rows: list[dict[str, float | str]]) -> dict[str, object]:
         level_rows = rows[-min(30, len(rows)) :]
         volume_rows = rows[-min(80, len(rows)) :]
         closes = [float(row["close"]) for row in level_rows]
         lows = [float(row.get("low") or row["close"]) for row in level_rows]
         highs = [float(row.get("high") or row["close"]) for row in level_rows]
+        all_closes = [float(row["close"]) for row in rows]
         current = closes[-1]
         sorted_lows = sorted(lows)
         sorted_highs = sorted(highs)
         support_candidates = [
             sorted_lows[max(0, int(len(sorted_lows) * ratio) - 1)]
-            for ratio in (0.28, 0.38, 0.50)
+            for ratio in (0.12, 0.22, 0.34, 0.50)
         ]
-        support_below = [value for value in support_candidates if value < current]
+        support_below = sorted({round(value, 3) for value in support_candidates if value < current}, reverse=True)
         support = max(support_below) if support_below else min(lows)
         resistance_candidates = [
             sorted_highs[min(len(sorted_highs) - 1, int(len(sorted_highs) * ratio))]
-            for ratio in (0.62, 0.78, 0.90)
+            for ratio in (0.55, 0.68, 0.82, 0.94)
         ]
-        resistance_above = [value for value in resistance_candidates if value > current]
+        resistance_above = sorted({round(value, 3) for value in resistance_candidates if value > current})
         resistance = min(resistance_above) if resistance_above else max(highs)
         low = min(lows)
         high = max(highs)
         chip_peak = current
+        chip_zones: list[dict[str, float]] = []
         if high > low:
             bins = [0.0] * 24
             step = (high - low) / len(bins)
@@ -1483,7 +1540,56 @@ class MonitorApp:
                 bins[index] += volume
             max_index = max(range(len(bins)), key=lambda idx: bins[idx])
             chip_peak = low + (max_index + 0.5) * step
-        return {"current": current, "support": support, "resistance": resistance, "chip_peak": chip_peak, "low": low, "high": high}
+            total_volume = sum(bins) or 1.0
+            for index in sorted(range(len(bins)), key=lambda idx: bins[idx], reverse=True)[:3]:
+                chip_zones.append(
+                    {
+                        "price": low + (index + 0.5) * step,
+                        "low": low + index * step,
+                        "high": low + (index + 1) * step,
+                        "weight": bins[index] / total_volume,
+                    }
+                )
+        volumes = [float(row.get("volume") or 0) for row in rows]
+        last_volume = volumes[-1] if volumes else 0.0
+        avg_volume = sum(volumes[-min(20, len(volumes)) :]) / max(1, min(20, len(volumes))) if volumes else 0.0
+        volume_ratio = last_volume / avg_volume if avg_volume else 1.0
+
+        def moving_average(size: int) -> float | None:
+            if len(all_closes) < size:
+                return None
+            return sum(all_closes[-size:]) / size
+
+        ma5 = moving_average(5)
+        ma10 = moving_average(10)
+        ma20 = moving_average(20)
+        if ma5 and ma10 and ma20:
+            if current > ma5 > ma10 > ma20:
+                trend = "多头排列"
+            elif current < ma5 < ma10 < ma20:
+                trend = "空头排列"
+            elif current >= ma20:
+                trend = "震荡偏强"
+            else:
+                trend = "震荡偏弱"
+        else:
+            trend = "样本不足"
+        return {
+            "current": current,
+            "support": support,
+            "supports": support_below[:3] or [support],
+            "resistance": resistance,
+            "resistances": resistance_above[:3] or [resistance],
+            "chip_peak": chip_peak,
+            "chip_zones": chip_zones,
+            "low": low,
+            "high": high,
+            "ma5": ma5,
+            "ma10": ma10,
+            "ma20": ma20,
+            "trend": trend,
+            "volume_ratio": volume_ratio,
+        }
 
     def _render_chart_payload(self, payload: dict[str, object]) -> None:
         canvas = payload.get("canvas")
@@ -1511,7 +1617,7 @@ class MonitorApp:
         if hasattr(status_var, "set"):
             status_var.set("走势更新完成")
 
-    def _draw_price_chart(self, canvas: tk.Canvas, rows: list[dict[str, float | str]], levels: dict[str, float], name: str, period: str) -> None:
+    def _draw_price_chart(self, canvas: tk.Canvas, rows: list[dict[str, float | str]], levels: dict[str, object], name: str, period: str) -> None:
         canvas.update_idletasks()
         width = max(760, canvas.winfo_width())
         height = max(380, canvas.winfo_height())
@@ -1519,8 +1625,13 @@ class MonitorApp:
         pad_left, pad_right, pad_top, pad_bottom = 58, 86, 34, 42
         lows = [float(row.get("low") or row["close"]) for row in rows]
         highs = [float(row.get("high") or row["close"]) for row in rows]
-        min_price = min(min(lows), float(levels.get("support", lows[-1])), float(levels.get("chip_peak", lows[-1])))
-        max_price = max(max(highs), float(levels.get("resistance", highs[-1])), float(levels.get("chip_peak", highs[-1])))
+        support_values = levels.get("supports")
+        resistance_values = levels.get("resistances")
+        supports = [float(value) for value in support_values if isinstance(value, (int, float))] if isinstance(support_values, list) else []
+        resistances = [float(value) for value in resistance_values if isinstance(value, (int, float))] if isinstance(resistance_values, list) else []
+        level_prices = supports + resistances + [float(levels.get("chip_peak") or lows[-1])]
+        min_price = min([min(lows), *level_prices])
+        max_price = max([max(highs), *level_prices])
         spread = max_price - min_price or 1.0
         min_price -= spread * 0.08
         max_price += spread * 0.08
@@ -1546,32 +1657,101 @@ class MonitorApp:
         if len(points) >= 4:
             canvas.create_line(*points, fill=COLORS["sage_dark"], width=2, smooth=True)
 
-        for label, price, color in (
-            ("压力", float(levels["resistance"]), COLORS["danger"]),
-            ("筹码峰", float(levels["chip_peak"]), COLORS["coral"]),
-            ("支撑", float(levels["support"]), COLORS["sage_dark"]),
-        ):
+        line_specs = []
+        for index, price in enumerate(resistances[:3], start=1):
+            line_specs.append((f"压{index}", price, COLORS["danger"]))
+        line_specs.append(("筹码峰", float(levels["chip_peak"]), COLORS["coral"]))
+        for index, price in enumerate(supports[:3], start=1):
+            line_specs.append((f"支{index}", price, COLORS["sage_dark"]))
+        for label, price, color in line_specs:
             y = y_at(price)
             canvas.create_line(pad_left, y, width - pad_right, y, fill=color, dash=(6, 4), width=1)
             canvas.create_text(width - pad_right + 8, y, text=f"{label} {price:.2f}", anchor=tk.W, fill=color, font=("Microsoft YaHei UI", 9, "bold"))
 
-        canvas.create_text(pad_left, 18, text=f"{name} {period} 走势", anchor=tk.W, fill=COLORS["text"], font=("Microsoft YaHei UI", 12, "bold"))
+        trend = str(levels.get("trend") or "")
+        canvas.create_text(pad_left, 18, text=f"{name} {period} 走势｜{trend}", anchor=tk.W, fill=COLORS["text"], font=("Microsoft YaHei UI", 12, "bold"))
         canvas.create_text(pad_left, height - 18, text=str(rows[0].get("label") or ""), anchor=tk.W, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
         canvas.create_text(width - pad_right, height - 18, text=str(rows[-1].get("label") or ""), anchor=tk.E, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
 
     def _chart_summary_text(self, payload: dict[str, object]) -> str:
         levels = payload.get("levels") if isinstance(payload.get("levels"), dict) else {}
         rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+        order_book = payload.get("order_book") if isinstance(payload.get("order_book"), dict) else {}
         current = float(levels.get("current") or 0)
         support = float(levels.get("support") or 0)
         resistance = float(levels.get("resistance") or 0)
         chip_peak = float(levels.get("chip_peak") or 0)
         support_gap = (current / support - 1) * 100 if support else 0.0
         resistance_gap = (resistance / current - 1) * 100 if current else 0.0
+        support_values = levels.get("supports")
+        resistance_values = levels.get("resistances")
+        supports = [float(value) for value in support_values if isinstance(value, (int, float))] if isinstance(support_values, list) else []
+        resistances = [float(value) for value in resistance_values if isinstance(value, (int, float))] if isinstance(resistance_values, list) else []
+        chip_zones = levels.get("chip_zones") if isinstance(levels.get("chip_zones"), list) else []
+        chip_text = "；".join(
+            f"{float(zone.get('low', 0)):.2f}-{float(zone.get('high', 0)):.2f}({float(zone.get('weight', 0)) * 100:.1f}%)"
+            for zone in chip_zones[:3]
+            if isinstance(zone, dict)
+        )
+        ma_text = (
+            f"MA5 {self._fmt_optional_price(levels.get('ma5'))} / "
+            f"MA10 {self._fmt_optional_price(levels.get('ma10'))} / "
+            f"MA20 {self._fmt_optional_price(levels.get('ma20'))}"
+        )
+        volume_ratio = float(levels.get("volume_ratio") or 1.0)
+        volume_note = "放量" if volume_ratio >= 1.5 else "缩量" if volume_ratio <= 0.7 else "量能平稳"
+        order_text = self._order_book_summary_text(order_book)
         return (
             f"{payload.get('name')}（{payload.get('code')}）{payload.get('period')}，样本 {len(rows)} 条。\n"
             f"现价/最新：{current:.2f}；支撑位：{support:.2f}（距现价 {support_gap:.1f}%）；压力位：{resistance:.2f}（上方空间 {resistance_gap:.1f}%）；筹码峰：{chip_peak:.2f}。\n"
-            "支撑/压力来自近段高低价分位，筹码峰来自成交量加权价格分布；它们是辅助观察线，不是自动买卖建议。"
+            f"多级支撑：{self._fmt_price_list(supports)}；多级压力：{self._fmt_price_list(resistances)}。\n"
+            f"筹码密集区：{chip_text or '样本不足'}；均线趋势：{levels.get('trend', '未知')}，{ma_text}；量价状态：{volume_note}（量能比 {volume_ratio:.2f}）。\n"
+            f"{order_text}\n"
+            "说明：支撑/压力来自近段高低价分位，筹码区来自成交量加权价格分布；盘口只表示公开接口返回的挂单快照，不等于真实成交承诺。"
+        )
+
+    def _fmt_optional_price(self, value: object) -> str:
+        number = self._safe_float(value)
+        return f"{number:.2f}" if number is not None else "-"
+
+    def _fmt_price_list(self, values: list[float]) -> str:
+        return "、".join(f"{value:.2f}" for value in values[:3]) or "-"
+
+    def _order_book_summary_text(self, order_book: dict[str, object]) -> str:
+        if order_book.get("status") != "ok":
+            return str(order_book.get("message") or "盘口未返回。")
+        bids = order_book.get("bids") if isinstance(order_book.get("bids"), list) else []
+        asks = order_book.get("asks") if isinstance(order_book.get("asks"), list) else []
+        spread = self._safe_float(order_book.get("spread"))
+        imbalance = self._safe_float(order_book.get("imbalance")) or 0.0
+
+        def level_text(items: list[object]) -> str:
+            parts = []
+            for item in items[:5]:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("label") or "")
+                price = self._safe_float(item.get("price"))
+                volume = self._safe_float(item.get("volume")) or 0.0
+                if price:
+                    parts.append(f"{label}{price:.2f}/{volume:.0f}")
+            return "，".join(parts) or "-"
+
+        def wall_text(items: list[object], fallback: str) -> str:
+            rows = [item for item in items if isinstance(item, dict) and self._safe_float(item.get("price"))]
+            if not rows:
+                return fallback
+            wall = max(rows, key=lambda item: self._safe_float(item.get("volume")) or 0.0)
+            price = self._safe_float(wall.get("price")) or 0.0
+            volume = self._safe_float(wall.get("volume")) or 0.0
+            return f"{wall.get('label', '')}{price:.2f}/{volume:.0f}"
+
+        side = "买盘占优" if imbalance >= 0.18 else "卖盘占优" if imbalance <= -0.18 else "买卖均衡"
+        return (
+            f"盘口快照：{side}，五档委比 {imbalance * 100:.1f}%，价差 {self._fmt_optional_price(spread)}。"
+            f"买盘：{level_text(bids)}。卖盘：{level_text(asks)}。"
+            f"最大买墙：{wall_text(bids, '-')}；最大卖墙：{wall_text(asks, '-')}。"
+            f"{order_book.get('message') or ''}"
         )
 
     def _open_research_report_window(self) -> None:
