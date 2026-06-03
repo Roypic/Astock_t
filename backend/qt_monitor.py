@@ -4,11 +4,14 @@ import json
 import os
 import queue
 import shutil
+import subprocess
 import sys
 import threading
 import time
 import traceback
+import urllib.request
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +55,14 @@ DEFAULT_INTERVAL_SECONDS = 30
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/push1.html"
 RELEASE_URL = "https://github.com/Roypic/Astock_t/releases"
 WINDOWS_EXE_URL = "https://github.com/Roypic/Astock_t/releases/download/windows-latest/AShareTSignalMonitor.exe"
+WINDOWS_V2_EXE_URL = "https://github.com/Roypic/Astock_t/releases/download/windows-v2-latest/AShareTSignalMonitor.exe"
 MACOS_ZIP_URL = "https://github.com/Roypic/Astock_t/releases/download/macos-latest/AShareTSignalMonitor-macOS.zip"
+GITHUB_DOWNLOAD_MIRRORS = (
+    "https://gh.llkk.cc/",
+    "https://ghproxy.net/",
+    "https://hub.gitmirror.com/",
+    "https://gh-proxy.com/",
+)
 
 
 def app_dir() -> Path:
@@ -255,7 +265,8 @@ class MonitorWindow(QMainWindow):
         self.open_push_btn = ModernButton("打开 PushPlus", "ghost")
         self.weixin_login_btn = ModernButton("微信登录", "ghost")
         self.weixin_session_btn = ModernButton("刷新会话", "ghost")
-        self.update_btn = ModernButton("直接下载新版", "ghost")
+        self.update_v1_btn = ModernButton("更新 v1 稳定版", "ghost")
+        self.update_v2_btn = ModernButton("更新 v2 预览版", "ghost")
         self.stop_btn.setEnabled(False)
         self.start_btn.clicked.connect(self._start)
         self.stop_btn.clicked.connect(self._stop)
@@ -263,7 +274,8 @@ class MonitorWindow(QMainWindow):
         self.open_push_btn.clicked.connect(lambda: webbrowser.open(PUSHPLUS_TOKEN_URL))
         self.weixin_login_btn.clicked.connect(self._start_weixin_login)
         self.weixin_session_btn.clicked.connect(self._start_weixin_session)
-        self.update_btn.clicked.connect(self._open_latest_download)
+        self.update_v1_btn.clicked.connect(lambda: self._start_update("v1", WINDOWS_EXE_URL))
+        self.update_v2_btn.clicked.connect(lambda: self._start_update("v2", WINDOWS_V2_EXE_URL))
         buttons = [
             self.start_btn,
             self.stop_btn,
@@ -271,7 +283,8 @@ class MonitorWindow(QMainWindow):
             self.open_push_btn,
             self.weixin_login_btn,
             self.weixin_session_btn,
-            self.update_btn,
+            self.update_v1_btn,
+            self.update_v2_btn,
         ]
         for idx, button in enumerate(buttons):
             action_grid.addWidget(button, idx // 2, idx % 2)
@@ -480,18 +493,72 @@ class MonitorWindow(QMainWindow):
             self.model_path.setText(path)
             self._refresh_risk_summary()
 
-    def _open_latest_download(self) -> None:
-        if sys.platform == "win32":
-            url = WINDOWS_EXE_URL
-            label = "Windows EXE"
-        elif sys.platform == "darwin":
-            url = MACOS_ZIP_URL
-            label = "macOS ZIP"
-        else:
-            url = RELEASE_URL
-            label = "Release 页面"
-        self._log(f"正在打开最新版下载：{label}")
-        webbrowser.open(url)
+    def _start_update(self, channel: str, download_url: str) -> None:
+        if sys.platform != "win32":
+            url = MACOS_ZIP_URL if sys.platform == "darwin" and channel == "v1" else RELEASE_URL
+            self._log(f"当前系统暂不支持一键替换，正在打开下载页：{channel}")
+            webbrowser.open(url)
+            return
+        if channel == "v2" and not QMessageBox.question(
+            self,
+            "更新 v2 预览版",
+            "v2 是现代界面预览版，功能仍需继续对齐 v1。\n\n是否下载并打开 v2？当前 v2 会关闭，新版本会启动。",
+        ) == QMessageBox.Yes:
+            return
+        self.status_value.setText(f"下载 {channel}")
+        self._log(f"正在下载 {channel} 更新包")
+        threading.Thread(target=self._run_update, args=(channel, download_url), daemon=True).start()
+
+    def _run_update(self, channel: str, download_url: str) -> None:
+        try:
+            updates_dir = app_dir() / "updates"
+            updates_dir.mkdir(parents=True, exist_ok=True)
+            suffix = datetime.now(BEIJING_TZ).strftime(f"{channel}-%Y%m%d%H%M%S")
+            target = updates_dir / f"AShareTSignalMonitor-{suffix}.exe"
+            used_url = self._download_with_mirrors(download_url, target)
+            self.queue.put(("update_ready", {"channel": channel, "file": str(target), "url": used_url}))
+        except Exception as exc:
+            self.queue.put(("error", f"{channel} 更新失败：{exc}"))
+
+    def _download_with_mirrors(self, download_url: str, target: Path) -> str:
+        errors = []
+        for url in self._download_candidates(download_url):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "AShareTSignalMonitor/2.0"})
+                with urllib.request.urlopen(req, timeout=90) as resp, target.open("wb") as out:
+                    shutil.copyfileobj(resp, out)
+                if target.stat().st_size < 1024 * 1024:
+                    raise RuntimeError("下载文件过小，可能不是有效 EXE")
+                with target.open("rb") as handle:
+                    if handle.read(2) != b"MZ":
+                        raise RuntimeError("下载文件不是有效 Windows EXE")
+                return url
+            except Exception as exc:
+                errors.append(f"{url}: {exc}")
+                self.queue.put(("log", f"下载源不可用，继续尝试下一个：{url}"))
+                try:
+                    if target.exists():
+                        target.unlink()
+                except Exception:
+                    pass
+        raise RuntimeError("所有下载源都失败：\n" + "\n".join(errors[-5:]))
+
+    def _download_candidates(self, download_url: str) -> list[str]:
+        urls = [download_url]
+        for base in GITHUB_DOWNLOAD_MIRRORS:
+            urls.append(base.rstrip("/") + "/" + download_url)
+        deduped = []
+        seen = set()
+        for url in urls:
+            if url not in seen:
+                seen.add(url)
+                deduped.append(url)
+        return deduped
+
+    def _install_update(self, update_file: Path) -> None:
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) if os.name == "nt" else 0
+        subprocess.Popen([str(update_file)], cwd=str(update_file.parent), creationflags=flags)
+        QApplication.instance().quit()
 
     def _model_files(self, model_path: Path) -> list[Path]:
         if model_path.is_file():
@@ -638,6 +705,17 @@ class MonitorWindow(QMainWindow):
                 self.status_value.setText("错误")
                 self._log(str(payload))
                 QMessageBox.critical(self, "错误", str(payload))
+            elif kind == "update_ready" and isinstance(payload, dict):
+                update_file = Path(str(payload.get("file", "")))
+                channel = str(payload.get("channel", "新版"))
+                self.status_value.setText(f"{channel} 已下载")
+                self._log(f"{channel} 更新包已下载：{update_file}")
+                if update_file.exists() and QMessageBox.question(
+                    self,
+                    "更新完成",
+                    f"{channel} 更新包已下载。\n\n是否现在打开新版本？当前 v2 会关闭。",
+                ) == QMessageBox.Yes:
+                    self._install_update(update_file)
             elif kind == "result" and isinstance(payload, dict):
                 self._render_result(payload)
 
