@@ -153,7 +153,7 @@ class PriceChartWidget(QWidget):
         super().__init__()
         self.payload: dict[str, object] | None = None
         self.error = ""
-        self.setMinimumHeight(360)
+        self.setMinimumHeight(430)
         self.setObjectName("priceChart")
 
     def set_payload(self, payload: dict[str, object]) -> None:
@@ -194,7 +194,10 @@ class PriceChartWidget(QWidget):
 
         width = max(320, rect.width())
         height = max(260, rect.height())
-        pad_left, pad_right, pad_top, pad_bottom = 64, 98, 46, 46
+        pad_left, pad_right, pad_top, pad_bottom = 64, 118, 46, 36
+        volume_top = max(pad_top + 170, int(height * 0.74))
+        price_bottom = volume_top - 18
+        volume_bottom = height - pad_bottom
         lows = [float(row.get("low") or row["close"]) for row in rows if isinstance(row, dict)]
         highs = [float(row.get("high") or row["close"]) for row in rows if isinstance(row, dict)]
         if not lows or not highs:
@@ -213,11 +216,11 @@ class PriceChartWidget(QWidget):
             return pad_left + index * (width - pad_left - pad_right) / max(1, len(rows) - 1)
 
         def y_at(price: float) -> float:
-            return pad_top + (max_price - price) * (height - pad_top - pad_bottom) / (max_price - min_price)
+            return pad_top + (max_price - price) * (price_bottom - pad_top) / (max_price - min_price)
 
         painter.setFont(QFont("Microsoft YaHei UI", 8))
         for i in range(5):
-            y = pad_top + i * (height - pad_top - pad_bottom) / 4
+            y = pad_top + i * (price_bottom - pad_top) / 4
             price = max_price - i * (max_price - min_price) / 4
             painter.setPen(QPen(QColor("#173755"), 1))
             painter.drawLine(pad_left, int(y), width - pad_right, int(y))
@@ -226,7 +229,28 @@ class PriceChartWidget(QWidget):
         for i in range(5):
             x = pad_left + i * (width - pad_left - pad_right) / 4
             painter.setPen(QPen(QColor("#102842"), 1))
-            painter.drawLine(int(x), pad_top, int(x), height - pad_bottom)
+            painter.drawLine(int(x), pad_top, int(x), volume_bottom)
+        painter.setPen(QPen(QColor("#1B4B7D"), 1))
+        painter.drawLine(pad_left, volume_top, width - pad_right, volume_top)
+
+        volumes = [max(0.0, float(row.get("volume") or 0)) for row in rows if isinstance(row, dict)]
+        max_volume = max(volumes) if volumes else 0.0
+        if max_volume > 0:
+            bar_span = max(2.0, (width - pad_left - pad_right) / max(1, len(rows)))
+            bar_width = max(1.0, min(6.0, bar_span * 0.62))
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    continue
+                volume = max(0.0, float(row.get("volume") or 0))
+                bar_height = (volume / max_volume) * max(8, volume_bottom - volume_top - 8)
+                x = x_at(index)
+                close = float(row.get("close") or 0)
+                prev_close = float(rows[index - 1].get("close") or close) if index > 0 and isinstance(rows[index - 1], dict) else close
+                color = QColor(255, 107, 114, 130) if close >= prev_close else QColor(72, 213, 151, 130)
+                painter.fillRect(int(x - bar_width / 2), int(volume_bottom - bar_height), int(bar_width), int(bar_height), color)
+            painter.setFont(QFont("Microsoft YaHei UI", 8))
+            painter.setPen(QColor("#92A9C4"))
+            painter.drawText(pad_left, volume_top - 5, "成交量")
 
         period = str(self.payload.get("period") or "")
         if period != "分时":
@@ -265,30 +289,38 @@ class PriceChartWidget(QWidget):
         line_specs.append(("筹码峰", chip_peak, chip_dash, QColor("#FFB199")))
         for index, price in enumerate(supports[:3], start=1):
             line_specs.append((f"支{index}", price, green_dash, QColor("#48D597")))
-        painter.setFont(QFont("Microsoft YaHei UI", 9, QFont.Bold))
+        painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.Bold))
+        label_positions: list[float] = []
+        min_label_gap = 15
         for label, price, pen, color in line_specs:
             y = y_at(price)
             painter.setPen(pen)
             painter.drawLine(pad_left, int(y), width - pad_right, int(y))
+            label_y = y
+            for used in label_positions:
+                if abs(label_y - used) < min_label_gap:
+                    label_y = used + min_label_gap
+            label_y = max(pad_top + 12, min(price_bottom - 8, label_y))
+            label_positions.append(label_y)
             painter.setPen(color)
-            painter.drawText(width - pad_right + 8, int(y + 4), f"{label} {price:.2f}")
+            painter.drawText(width - pad_right + 7, int(label_y + 3), f"{label} {price:.2f}")
 
         name = str(self.payload.get("name") or "")
         trend = str(levels.get("trend") or "")
         current = float(levels.get("current") or 0)
         prev = float(rows[-2].get("close") or current) if len(rows) > 1 and isinstance(rows[-2], dict) else current
         current_color = QColor("#FF6B72") if current >= prev else QColor("#48D597")
-        painter.setFont(QFont("Microsoft YaHei UI", 12, QFont.Bold))
+        painter.setFont(QFont("Microsoft YaHei UI", 10, QFont.Bold))
         painter.setPen(QColor("#EAF3FF"))
         painter.drawText(pad_left, 28, f"{name} {period} 走势｜{trend}")
         painter.setPen(current_color)
-        painter.drawText(width - pad_right - 120, 28, f"现价 {current:.2f}")
+        painter.drawText(width - pad_right - 128, 28, f"现价 {current:.2f}")
         painter.setFont(QFont("Microsoft YaHei UI", 8))
         painter.setPen(QColor("#92A9C4"))
         first_label = str(rows[0].get("label") or "") if isinstance(rows[0], dict) else ""
         last_label = str(rows[-1].get("label") or "") if isinstance(rows[-1], dict) else ""
-        painter.drawText(pad_left, height - 18, first_label)
-        painter.drawText(width - pad_right - 80, height - 18, last_label)
+        painter.drawText(pad_left, height - 14, first_label)
+        painter.drawText(width - pad_right - 80, height - 14, last_label)
 
 
 class MonitorWindow(QMainWindow):
