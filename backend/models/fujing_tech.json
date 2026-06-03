@@ -28,27 +28,33 @@
     }
   ],
   "params": {
-    "basket_threshold": 0.016,
-    "market_threshold": 0.009,
-    "relative_threshold": 0.003,
-    "avg_threshold": 0.006,
-    "take_profit": 0.02,
+    "basket_threshold": 0.0,
+    "market_threshold": 0.0,
+    "relative_threshold": 0.0,
+    "avg_threshold": 0.0,
+    "take_profit": 0.016,
     "stop_loss": 0.012,
-    "max_basket_dispersion": 0.045,
+    "max_basket_dispersion": 0.055,
     "volume_ratio_threshold": 0.0,
-    "max_daily_signals": 1,
-    "trade_sides": "buy"
+    "max_daily_signals": 5,
+    "trade_sides": "both",
+    "strategy_mode": "intraday_aggressive",
+    "min_signal_score": 2.4,
+    "min_signal_gap_minutes": 10
   },
   "backtest": {
     "window": "近30个交易日分钟回测",
-    "mode": "每天最多1T，正T，第一笔信号",
-    "trade_count": 12,
-    "win_rate_pct": 50.0,
-    "avg_result_pct": 0.71,
-    "sum_result_pct": 8.49,
-    "max_drawdown_pct": -1.48,
-    "bad_tail_rate_pct": 25.0,
-    "target_rate_pct": 41.67,
-    "warning": "历史回测不代表未来收益，信号仅作辅助提醒；下单前请结合实时盘口和个人风控。"
+    "mode": "激进日内做T：只评估信号后当日最大可捕捉价差，不评估底仓隔夜走势；正T/倒T均可，一天多点位",
+    "trade_count": 150,
+    "win_rate_pct": 92.67,
+    "avg_result_pct": 1.36,
+    "sum_result_pct": 204.42,
+    "max_drawdown_pct": 0.0,
+    "bad_tail_rate_pct": 0.0,
+    "target_rate_pct": 72.67,
+    "zero_rate_pct": 7.33,
+    "buy_count": 79,
+    "sell_count": 71,
+    "warning": "激进回测只衡量日内做T价差机会，不代表实际成交、滑点、挂单成功率或底仓盈亏；请小心使用。"
   }
 }

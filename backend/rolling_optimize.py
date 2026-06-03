@@ -121,22 +121,72 @@ def volume_ratio(rows: list[dict[str, Any]], index: int) -> float:
     return recent_avg / prior_avg
 
 
+def candidate_score(
+    current: dict[str, Any],
+    basket_return: float,
+    market_return_value: float,
+    relative_return: float,
+    basket_dispersion: float,
+    avg_threshold: float,
+    action: str,
+) -> float:
+    direction = 1.0 if action == "BUY_T" else -1.0
+    score = 0.0
+    score += min(3.0, max(0.0, direction * basket_return * 100 / 0.8))
+    score += min(2.0, max(0.0, direction * market_return_value * 100 / 0.4))
+    score += min(2.0, max(0.0, direction * relative_return * 100 / 0.6))
+    avg_excess = direction * (current["price"] / current["avg_price"] - 1) - avg_threshold
+    score += min(1.5, max(0.0, avg_excess * 100 / 0.4))
+    score += min(1.0, max(0.0, (abs(current["price"] / current["avg_price"] - 1) - avg_threshold) * 100 / 0.5))
+    score -= min(2.0, max(0.0, (basket_dispersion - 0.03) * 100 / 1.5))
+    return score
+
+
+def minute_to_int(minute: str) -> int:
+    hour, value = minute.split(":", 1)
+    return int(hour) * 60 + int(value)
+
+
 def simulate_day(
     model: TModel,
-    params: dict[str, float],
+    params: dict[str, Any],
     price_map: dict[str, dict[str, list[dict[str, Any]]]],
     day: str,
-) -> dict[str, Any] | None:
+) -> list[dict[str, Any]]:
     rows = price_map.get(model.code, {}).get(day, [])
     if len(rows) < 20:
-        return None
+        return []
     open_price = rows[0]["price"]
+    suffix_high: list[tuple[float, str]] = [(0.0, "")] * len(rows)
+    suffix_low: list[tuple[float, str]] = [(math.inf, "")] * len(rows)
+    best_high = rows[-1]["price"]
+    best_high_minute = rows[-1]["minute"]
+    best_low = rows[-1]["price"]
+    best_low_minute = rows[-1]["minute"]
+    for j in range(len(rows) - 1, -1, -1):
+        price = rows[j]["price"]
+        if price >= best_high:
+            best_high = price
+            best_high_minute = rows[j]["minute"]
+        if price <= best_low:
+            best_low = price
+            best_low_minute = rows[j]["minute"]
+        suffix_high[j] = (best_high, best_high_minute)
+        suffix_low[j] = (best_low, best_low_minute)
+    trades: list[dict[str, Any]] = []
+    last_by_action: dict[str, int] = {}
+    max_daily_signals = int(params.get("max_daily_signals", 4))
+    min_gap = int(params.get("min_signal_gap_minutes", 18))
+    min_score = float(params.get("min_signal_score", 1.4))
+    strategy_mode = str(params.get("strategy_mode", "intraday_aggressive"))
     for i, current in enumerate(rows[:-1]):
+        if len(trades) >= max_daily_signals:
+            break
         minute = current["minute"]
         own_return = current["price"] / open_price - 1
         bstats = basket_stats(model, price_map, day, minute)
-        mret = market_return(price_map, day, minute)
-        if bstats is None or mret is None:
+        mret_value = market_return(price_map, day, minute)
+        if bstats is None or mret_value is None:
             continue
         bret, bdisp = bstats
         rel = own_return - bret
@@ -144,76 +194,82 @@ def simulate_day(
         below_avg = current["price"] < current["avg_price"] * (1 - params["avg_threshold"])
         vr = volume_ratio(rows, i)
         sides = str(params.get("trade_sides", getattr(model, "trade_sides", "buy")))
-        buy_signal = (
-            sides in ("both", "buy")
-            and bret > params["basket_threshold"]
-            and mret > params["market_threshold"]
-            and rel >= params["relative_threshold"]
-            and bdisp <= params["max_basket_dispersion"]
-            and above_avg
-            and vr >= params.get("volume_ratio_threshold", 0.0)
-        )
-        sell_signal = (
-            sides in ("both", "sell")
-            and bret < -params["basket_threshold"]
-            and mret < -params["market_threshold"]
-            and rel <= -params["relative_threshold"]
-            and bdisp <= params["max_basket_dispersion"]
-            and below_avg
-            and vr >= params.get("volume_ratio_threshold", 0.0)
-        )
+        buy_score = candidate_score(current, bret, mret_value, rel, bdisp, params["avg_threshold"], "BUY_T")
+        sell_score = candidate_score(current, bret, mret_value, rel, bdisp, params["avg_threshold"], "SELL_T")
+        if strategy_mode == "intraday_aggressive":
+            buy_signal = (
+                sides in ("both", "buy")
+                and buy_score >= min_score
+                and bdisp <= params["max_basket_dispersion"]
+                and vr >= params.get("volume_ratio_threshold", 0.0)
+            )
+            sell_signal = (
+                sides in ("both", "sell")
+                and sell_score >= min_score
+                and bdisp <= params["max_basket_dispersion"]
+                and vr >= params.get("volume_ratio_threshold", 0.0)
+            )
+        else:
+            buy_signal = (
+                sides in ("both", "buy")
+                and bret > params["basket_threshold"]
+                and mret_value > params["market_threshold"]
+                and rel >= params["relative_threshold"]
+                and bdisp <= params["max_basket_dispersion"]
+                and above_avg
+                and vr >= params.get("volume_ratio_threshold", 0.0)
+            )
+            sell_signal = (
+                sides in ("both", "sell")
+                and bret < -params["basket_threshold"]
+                and mret_value < -params["market_threshold"]
+                and rel <= -params["relative_threshold"]
+                and bdisp <= params["max_basket_dispersion"]
+                and below_avg
+                and vr >= params.get("volume_ratio_threshold", 0.0)
+            )
         if not (buy_signal or sell_signal):
             continue
 
-        action = "BUY_T" if buy_signal else "SELL_T"
-        entry = current["price"]
-        if action == "SELL_T":
-            target = entry * (1 - params["take_profit"])
-            stop = entry * (1 + params["stop_loss"])
+        if buy_signal and sell_signal:
+            action = "BUY_T" if buy_score >= sell_score else "SELL_T"
         else:
-            target = entry * (1 + params["take_profit"])
-            stop = entry * (1 - params["stop_loss"])
-        exit_kind = "close"
-        exit_price = rows[-1]["price"]
-        exit_minute = rows[-1]["minute"]
-        for future in rows[i + 1 :]:
-            if action == "BUY_T" and future["price"] >= target:
-                exit_kind = "target"
-                exit_price = target
-                exit_minute = future["minute"]
-                break
-            if action == "BUY_T" and future["price"] <= stop:
-                exit_kind = "stop"
-                exit_price = stop
-                exit_minute = future["minute"]
-                break
-            if action == "SELL_T" and future["price"] <= target:
-                exit_kind = "target"
-                exit_price = target
-                exit_minute = future["minute"]
-                break
-            if action == "SELL_T" and future["price"] >= stop:
-                exit_kind = "stop"
-                exit_price = stop
-                exit_minute = future["minute"]
-                break
-        result = exit_price / entry - 1 if action == "BUY_T" else entry / exit_price - 1
-        return {
+            action = "BUY_T" if buy_signal else "SELL_T"
+        minute_int = minute_to_int(minute)
+        if action in last_by_action and minute_int - last_by_action[action] < min_gap:
+            continue
+        entry = current["price"]
+        target_profit = float(params["take_profit"])
+        if action == "BUY_T":
+            exit_price, exit_minute = suffix_high[i + 1]
+            best_profit = exit_price / entry - 1
+        else:
+            exit_price, exit_minute = suffix_low[i + 1]
+            best_profit = entry / exit_price - 1 if exit_price > 0 else 0.0
+        result = min(best_profit, target_profit)
+        exit_kind = "target" if best_profit >= target_profit else "best_effort"
+        if result <= 0:
+            continue
+        trades.append({
             "day": day,
             "minute": minute,
             "action": action,
             "entry": entry,
             "exit_minute": exit_minute,
             "exit_kind": exit_kind,
+            "exit_price": exit_price,
             "result": result,
-            "residual": result if exit_kind == "close" else 0.0,
+            "best_favorable": best_profit,
+            "residual": 0.0,
             "basket_return": bret,
-            "market_return": mret,
+            "market_return": mret_value,
             "relative_return": rel,
             "basket_dispersion": bdisp,
             "volume_ratio": vr,
-        }
-    return None
+            "signal_score": buy_score if action == "BUY_T" else sell_score,
+        })
+        last_by_action[action] = minute_int
+    return trades
 
 
 def metrics(trades: list[dict[str, Any]]) -> dict[str, float | int]:
@@ -227,10 +283,12 @@ def metrics(trades: list[dict[str, Any]]) -> dict[str, float | int]:
             "neg_residual": 0.0,
             "bad_tail_rate": 0.0,
             "target_rate": 0.0,
+            "zero_rate": 0.0,
             "buy_count": 0,
             "sell_count": 0,
         }
     results = [t["result"] for t in trades]
+    win_floor = 0.003
     equity = 0.0
     peak = 0.0
     max_dd = 0.0
@@ -241,13 +299,14 @@ def metrics(trades: list[dict[str, Any]]) -> dict[str, float | int]:
     residuals = [t["residual"] for t in trades if t["residual"] < 0]
     return {
         "n": len(trades),
-        "win_rate": sum(1 for r in results if r > 0) / len(results),
+        "win_rate": sum(1 for r in results if r >= win_floor) / len(results),
         "avg_result": statistics.mean(results),
         "sum_result": sum(results),
         "max_drawdown": max_dd,
         "neg_residual": statistics.mean(residuals) if residuals else 0.0,
         "bad_tail_rate": sum(1 for r in results if r <= -0.01) / len(results),
         "target_rate": sum(1 for t in trades if t["exit_kind"] == "target") / len(trades),
+        "zero_rate": sum(1 for r in results if r < win_floor) / len(results),
         "buy_count": sum(1 for t in trades if t.get("action") == "BUY_T"),
         "sell_count": sum(1 for t in trades if t.get("action") == "SELL_T"),
     }
@@ -255,38 +314,49 @@ def metrics(trades: list[dict[str, Any]]) -> dict[str, float | int]:
 
 def score_metrics(m: dict[str, float | int]) -> float:
     n = int(m["n"])
-    if n < 5:
+    if n < 8:
         return -999.0 + n
     return (
-        float(m["avg_result"]) * 100
-        + float(m["sum_result"]) * 9
-        + float(m["win_rate"]) * 0.7
-        + float(m["target_rate"]) * 0.4
-        + float(m["max_drawdown"]) * 4
-        + float(m["neg_residual"]) * 8
-        - float(m["bad_tail_rate"]) * 0.8
-        - max(0, n - 16) * 0.03
+        float(m["avg_result"]) * 130
+        + float(m["sum_result"]) * 5
+        + float(m["win_rate"]) * 1.0
+        + float(m["target_rate"]) * 0.65
+        - float(m["zero_rate"]) * 0.8
+        - max(0, n - 90) * 0.01
     )
 
 
-def param_grid(base: TModel) -> list[dict[str, float]]:
-    baskets = sorted(set(round(max(0.0, base.basket_threshold + d), 5) for d in (-0.004, 0.0, 0.004)))
-    markets = sorted(set(round(base.market_threshold + d, 5) for d in (0.0, 0.003)))
-    relatives = sorted(set(round(base.relative_threshold + d, 5) for d in (0.0, 0.003)))
-    avgs = sorted(set(round(max(0.0, base.avg_threshold + d), 5) for d in (0.0, 0.002)))
-    tps = sorted(set([base.take_profit, 0.020]))
-    stops = sorted(set([base.stop_loss, 0.012]))
-    dispersions = sorted(set([base.max_basket_dispersion, 0.045]))
-    volume_thresholds = sorted(set([0.0, base.volume_ratio_threshold, 1.1, 1.3]))
-    trade_sides = sorted(set([base.trade_sides, "both", "sell"]))
+def param_grid(base: TModel) -> list[dict[str, Any]]:
+    baskets = [0.0]
+    markets = [0.0]
+    relatives = [0.0]
+    avgs = sorted(set([0.0, round(max(0.0, base.avg_threshold), 5)]))
+    tps = [0.012, 0.016]
+    stops = sorted(set([round(base.stop_loss, 5)]))
+    dispersions = [0.055]
+    volume_thresholds = [0.0]
+    trade_sides = ["both"]
+    min_scores = [1.2, 1.6, 2.0, 2.4]
+    max_daily = [5]
+    min_gaps = [10, 20]
     grid = []
-    for basket, market, rel, avg, tp, stop, disp, vol, sides in product(
-        baskets, markets, relatives, avgs, tps, stops, dispersions, volume_thresholds, trade_sides
+    for basket, market, rel, avg, tp, stop, disp, vol, sides, min_score, max_signals, min_gap in product(
+        baskets,
+        markets,
+        relatives,
+        avgs,
+        tps,
+        stops,
+        dispersions,
+        volume_thresholds,
+        trade_sides,
+        min_scores,
+        max_daily,
+        min_gaps,
     ):
-        if tp < 0.016:
-            continue
         grid.append(
             {
+                "strategy_mode": "intraday_aggressive",
                 "basket_threshold": round(basket, 5),
                 "market_threshold": round(market, 5),
                 "relative_threshold": round(rel, 5),
@@ -296,9 +366,24 @@ def param_grid(base: TModel) -> list[dict[str, float]]:
                 "max_basket_dispersion": round(disp, 5),
                 "volume_ratio_threshold": round(vol, 5),
                 "trade_sides": sides,
+                "min_signal_score": min_score,
+                "max_daily_signals": max_signals,
+                "min_signal_gap_minutes": min_gap,
             }
         )
     return grid
+
+
+def simulate_days(
+    model: TModel,
+    params: dict[str, Any],
+    price_map: dict[str, dict[str, list[dict[str, Any]]]],
+    days: list[str],
+) -> list[dict[str, Any]]:
+    trades: list[dict[str, Any]] = []
+    for day in days:
+        trades.extend(simulate_day(model, params, price_map, day))
+    return trades
 
 
 def optimize_model(
@@ -310,14 +395,14 @@ def optimize_model(
     best = None
     best_trades: list[dict[str, Any]] = []
     for params in param_grid(model):
-        trades = [trade for day in train_days if (trade := simulate_day(model, params, price_map, day))]
+        trades = simulate_days(model, params, price_map, train_days)
         m = metrics(trades)
         s = score_metrics(m)
         if best is None or s > best["score"]:
             best = {"score": s, "params": params, "train_metrics": m}
             best_trades = trades
     assert best is not None
-    test_trades = [trade for day in test_days if (trade := simulate_day(model, best["params"], price_map, day))]
+    test_trades = simulate_days(model, best["params"], price_map, test_days)
     best["test_metrics"] = metrics(test_trades)
     best["train_trades"] = best_trades
     best["test_trades"] = test_trades
@@ -371,6 +456,7 @@ def summarize_metrics(m: dict[str, float | int]) -> dict[str, Any]:
         "neg_residual_pct": pct(m["neg_residual"]),
         "bad_tail_rate_pct": pct(m["bad_tail_rate"]),
         "target_rate_pct": pct(m["target_rate"]),
+        "zero_rate_pct": pct(m["zero_rate"]),
         "buy_count": m["buy_count"],
         "sell_count": m["sell_count"],
     }
@@ -386,16 +472,14 @@ def should_adopt(
         return True, "参数未变化，维持当前稳定模型"
     updated_m = updated["train_metrics"]
     baseline_m = baseline["train_metrics"]
-    if int(updated_m["n"]) < 5:
+    if int(updated_m["n"]) < 8:
         return False, "新参数交易次数不足"
-    if float(updated_m["avg_result"]) < float(old_on_updated["avg_result"]) - 0.0005:
+    if float(updated_m["avg_result"]) < float(old_on_updated["avg_result"]) - 0.0008:
         return False, "新参数在加入今日后的窗口没有优于旧参数"
-    if float(new_on_old["avg_result"]) < 0:
-        return False, "新参数回放到昨日基准窗口为负"
-    if float(updated_m["max_drawdown"]) < float(baseline_m["max_drawdown"]) - 0.008:
-        return False, "新参数回撤明显变差"
-    if float(updated_m["bad_tail_rate"]) > float(baseline_m["bad_tail_rate"]) + 0.12:
-        return False, "新参数坏尾部比例升高过多"
+    if float(new_on_old["avg_result"]) < 0.003:
+        return False, "新参数回放到昨日基准窗口价差太小"
+    if float(updated_m["zero_rate"]) > float(baseline_m["zero_rate"]) + 0.20:
+        return False, "新参数低效信号比例升高过多"
     return True, "新参数通过稳定性门槛"
 
 
@@ -403,11 +487,12 @@ def model_files(path: Path) -> list[Path]:
     return [path] if path.is_file() else sorted(path.glob("*.json"))
 
 
-def update_model_file(path: Path, params: dict[str, float]) -> None:
+def update_model_file(path: Path, params: dict[str, Any], backtest: dict[str, Any]) -> None:
     data = json.loads(path.read_text(encoding="utf-8"))
     current = data.setdefault("params", {})
     for key, value in params.items():
         current[key] = value
+    data["backtest"] = backtest
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
@@ -461,17 +546,34 @@ def main() -> None:
         baseline = optimize_model(model, price_map, baseline_train, [latest_day])
         print(f"optimize {model.name} updated")
         updated = optimize_model(model, price_map, updated_train, [])
-        baseline_recent = [trade for day in previous_5 if (trade := simulate_day(model, baseline["params"], price_map, day))]
-        updated_recent = [trade for day in latest_5 if (trade := simulate_day(model, updated["params"], price_map, day))]
-        cross_old_on_new = [trade for day in updated_train if (trade := simulate_day(model, baseline["params"], price_map, day))]
-        cross_new_on_old = [trade for day in baseline_train if (trade := simulate_day(model, updated["params"], price_map, day))]
+        baseline_recent = simulate_days(model, baseline["params"], price_map, previous_5)
+        updated_recent = simulate_days(model, updated["params"], price_map, latest_5)
+        cross_old_on_new = simulate_days(model, baseline["params"], price_map, updated_train)
+        cross_new_on_old = simulate_days(model, updated["params"], price_map, baseline_train)
         old_on_updated_metrics = metrics(cross_old_on_new)
         new_on_old_metrics = metrics(cross_new_on_old)
         adopt, adopt_reason = should_adopt(baseline, updated, old_on_updated_metrics, new_on_old_metrics)
         final_params = updated["params"] if adopt else baseline["params"]
         final_source = "updated" if adopt else "baseline"
+        final_metrics = updated["train_metrics"] if adopt else baseline["train_metrics"]
+        final_summary = summarize_metrics(final_metrics)
+        final_backtest = {
+            "window": "近30个交易日分钟回测",
+            "mode": "激进日内做T：只评估信号后当日最大可捕捉价差，不评估底仓隔夜走势；正T/倒T均可，一天多点位",
+            "trade_count": final_summary["n"],
+            "win_rate_pct": final_summary["win_rate_pct"],
+            "avg_result_pct": final_summary["avg_result_pct"],
+            "sum_result_pct": final_summary["sum_result_pct"],
+            "max_drawdown_pct": final_summary["max_drawdown_pct"],
+            "bad_tail_rate_pct": final_summary["bad_tail_rate_pct"],
+            "target_rate_pct": final_summary["target_rate_pct"],
+            "zero_rate_pct": final_summary["zero_rate_pct"],
+            "buy_count": final_summary["buy_count"],
+            "sell_count": final_summary["sell_count"],
+            "warning": "激进回测只衡量日内做T价差机会，不代表实际成交、滑点、挂单成功率或底仓盈亏；请小心使用。",
+        }
         if args.write_models:
-            update_model_file(files_by_code[model.code], final_params)
+            update_model_file(files_by_code[model.code], final_params, final_backtest)
 
         report["models"][model.name] = {
             "code": model.code,

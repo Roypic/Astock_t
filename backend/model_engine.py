@@ -56,6 +56,9 @@ class TModel:
     volume_ratio_threshold: float = 0.0
     max_daily_signals: int = 1
     trade_sides: str = "buy"
+    strategy_mode: str = "intraday_aggressive"
+    min_signal_gap_minutes: int = 20
+    min_signal_score: float = 1.8
 
 
 @dataclass
@@ -147,7 +150,7 @@ class SignalStore:
             return {"signals": []}
         return json.loads(self.path.read_text(encoding="utf-8"))
 
-    def record_if_new(self, signal: dict[str, Any], max_daily_signals: int) -> tuple[bool, int]:
+    def record_if_new(self, signal: dict[str, Any], max_daily_signals: int, min_gap_minutes: int = 0) -> tuple[bool, int]:
         state = self._load()
         signals = state.setdefault("signals", [])
         same_day = [
@@ -157,6 +160,15 @@ class SignalStore:
         ]
         if any(s.get("signal_key") == signal["signal_key"] for s in same_day):
             return False, len(same_day)
+        action = signal.get("action")
+        signal_minute = _minute_to_int(str(signal.get("minute", "")))
+        if min_gap_minutes > 0 and signal_minute is not None:
+            for previous in reversed(same_day):
+                if previous.get("action") != action:
+                    continue
+                previous_minute = _minute_to_int(str(previous.get("minute", "")))
+                if previous_minute is not None and signal_minute - previous_minute < min_gap_minutes:
+                    return False, len(same_day)
         if len(same_day) >= max_daily_signals:
             return False, len(same_day)
         signals.append(signal)
@@ -241,24 +253,38 @@ class ModelSignalEngine:
         buy_score = self._score(model, current, basket_return, market_return, relative_return, basket_dispersion, "BUY_T")
         sell_score = self._score(model, current, basket_return, market_return, relative_return, basket_dispersion, "SELL_T")
 
-        has_buy_signal = (
-            model.trade_sides in ("both", "buy")
-            and basket_return > model.basket_threshold
-            and market_return > model.market_threshold
-            and relative_return >= model.relative_threshold
-            and basket_dispersion <= model.max_basket_dispersion
-            and above_avg
-            and volume_ratio >= model.volume_ratio_threshold
-        )
-        has_sell_signal = (
-            model.trade_sides in ("both", "sell")
-            and basket_return < -model.basket_threshold
-            and market_return < -model.market_threshold
-            and relative_return <= -model.relative_threshold
-            and basket_dispersion <= model.max_basket_dispersion
-            and below_avg
-            and volume_ratio >= model.volume_ratio_threshold
-        )
+        if model.strategy_mode == "intraday_aggressive":
+            has_buy_signal = (
+                model.trade_sides in ("both", "buy")
+                and buy_score >= model.min_signal_score
+                and basket_dispersion <= model.max_basket_dispersion
+                and volume_ratio >= model.volume_ratio_threshold
+            )
+            has_sell_signal = (
+                model.trade_sides in ("both", "sell")
+                and sell_score >= model.min_signal_score
+                and basket_dispersion <= model.max_basket_dispersion
+                and volume_ratio >= model.volume_ratio_threshold
+            )
+        else:
+            has_buy_signal = (
+                model.trade_sides in ("both", "buy")
+                and basket_return > model.basket_threshold
+                and market_return > model.market_threshold
+                and relative_return >= model.relative_threshold
+                and basket_dispersion <= model.max_basket_dispersion
+                and above_avg
+                and volume_ratio >= model.volume_ratio_threshold
+            )
+            has_sell_signal = (
+                model.trade_sides in ("both", "sell")
+                and basket_return < -model.basket_threshold
+                and market_return < -model.market_threshold
+                and relative_return <= -model.relative_threshold
+                and basket_dispersion <= model.max_basket_dispersion
+                and below_avg
+                and volume_ratio >= model.volume_ratio_threshold
+            )
         action = "BUY_T" if has_buy_signal else "SELL_T" if has_sell_signal else ""
         score = buy_score if action == "BUY_T" else sell_score
 
@@ -289,7 +315,7 @@ class ModelSignalEngine:
             volume_ratio=volume_ratio,
             action=action,
         )
-        is_new, count = self.store.record_if_new(signal, model.max_daily_signals)
+        is_new, count = self.store.record_if_new(signal, model.max_daily_signals, model.min_signal_gap_minutes)
         signal["is_new"] = is_new
         signal["daily_count"] = count
         return signal
@@ -357,6 +383,7 @@ class ModelSignalEngine:
         score += min(2.0, max(0.0, direction * relative_return * 100 / 0.6))
         avg_excess = direction * (current.price / current.avg_price - 1) - model.avg_threshold
         score += min(1.5, max(0.0, avg_excess * 100 / 0.4))
+        score += min(1.0, max(0.0, (abs(current.price / current.avg_price - 1) - model.avg_threshold) * 100 / 0.5))
         score -= min(2.0, max(0.0, (basket_dispersion - 0.03) * 100 / 1.5))
         return score
 
@@ -387,18 +414,27 @@ class ModelSignalEngine:
         action: str,
     ) -> dict[str, Any]:
         entry_price = current.price
+        target1_pct = model.take_profit * 0.5
+        target2_pct = model.take_profit
+        target3_pct = model.take_profit * 1.5
         if action == "SELL_T":
             exit_price = current.price * (1 - model.take_profit)
             stop_price = current.price * (1 + model.stop_loss)
             entry_label = "建议卖出T仓"
             exit_label = "目标买回"
-            signal_detail = "倒T：先卖出T仓，跌到目标价买回；若反弹到止损价放弃/止损。"
+            target1 = current.price * (1 - target1_pct)
+            target2 = current.price * (1 - target2_pct)
+            target3 = current.price * (1 - target3_pct)
+            signal_detail = "激进倒T：先卖出已有T仓，分批在目标价买回；只捕捉日内价差。"
         else:
             exit_price = current.price * (1 + model.take_profit)
             stop_price = current.price * (1 - model.stop_loss)
             entry_label = "建议买入T仓"
             exit_label = "目标卖出"
-            signal_detail = "正T：先买入T仓，涨到目标价卖出；若跌到止损价放弃/止损。"
+            target1 = current.price * (1 + target1_pct)
+            target2 = current.price * (1 + target2_pct)
+            target3 = current.price * (1 + target3_pct)
+            signal_detail = "激进正T：先买入T仓，分批在目标价卖出；只捕捉日内价差。"
         return {
             "status": "signal",
             "signal_key": f"{model.code}:{current.day}:{current.minute}:{action}",
@@ -417,6 +453,9 @@ class ModelSignalEngine:
             "entry_price": round(entry_price, 2),
             "exit_price": round(exit_price, 2),
             "stop_price": round(stop_price, 2),
+            "target1_price": round(target1, 2),
+            "target2_price": round(target2, 2),
+            "target3_price": round(target3, 2),
             "last_price": round(current.price, 2),
             "avg_price": round(current.avg_price, 2),
             "own_return_pct": round(own_return * 100, 2),
@@ -431,9 +470,12 @@ class ModelSignalEngine:
             "take_profit_pct": round(model.take_profit * 100, 2),
             "stop_loss_pct": round(model.stop_loss * 100, 2),
             "max_daily_signals": model.max_daily_signals,
+            "strategy_mode": model.strategy_mode,
+            "min_signal_gap_minutes": model.min_signal_gap_minutes,
             "message": (
                 f"{signal_detail} 入场价 {round(entry_price, 2)}，"
-                f"{exit_label} {round(exit_price, 2)}，止损价 {round(stop_price, 2)}。"
+                f"目标1/2/3：{round(target1, 2)}/{round(target2, 2)}/{round(target3, 2)}，"
+                f"参考风控价 {round(stop_price, 2)}。"
             ),
         }
 
@@ -486,8 +528,19 @@ def _load_model(path: Path) -> TModel:
         volume_ratio_threshold=float(params.get("volume_ratio_threshold", 0.0)),
         max_daily_signals=int(params.get("max_daily_signals", 1)),
         trade_sides=str(params.get("trade_sides", "buy")),
+        strategy_mode=str(params.get("strategy_mode", "intraday_aggressive")),
+        min_signal_gap_minutes=int(params.get("min_signal_gap_minutes", 20)),
+        min_signal_score=float(params.get("min_signal_score", 1.8)),
     )
 
 
 def _round_or_dash(value: float | None) -> float | str:
     return round(value, 2) if isinstance(value, (int, float)) else "-"
+
+
+def _minute_to_int(minute: str) -> int | None:
+    try:
+        hour, value = minute.split(":", 1)
+        return int(hour) * 60 + int(value)
+    except Exception:
+        return None

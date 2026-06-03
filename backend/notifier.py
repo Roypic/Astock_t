@@ -18,7 +18,8 @@ def format_signal(signal: dict[str, Any]) -> str:
         f"动作：{signal['entry_label']}",
         f"入场价：{signal['entry_price']}",
         f"{signal['exit_label']}：{signal['exit_price']}",
-        f"止损价：{signal['stop_price']}",
+        f"目标1/2/3：{signal.get('target1_price', '-')}/{signal.get('target2_price', '-')}/{signal.get('target3_price', '-')}",
+        f"参考风控价：{signal['stop_price']}",
         f"今日次数：{signal.get('daily_count', '?')}/{signal.get('max_daily_signals', 1)}",
         f"个股涨幅：{signal.get('own_return_pct')}%",
         f"大盘强弱：{signal.get('market_return_pct')}%",
@@ -27,7 +28,7 @@ def format_signal(signal: dict[str, Any]) -> str:
         f"相对强弱：{signal.get('relative_return_pct')}%",
         f"MA5/10/20：{signal.get('ma5')}/{signal.get('ma10')}/{signal.get('ma20')}",
         "",
-        "执行建议：收到信号后自行决定是否入场；入场后可按目标价/止损价预挂单或设置提醒。",
+        "执行建议：激进做T只捕捉日内价差，可按目标1/2/3分批挂单；是否入场请自行决定。",
         "分钟级辅助提醒，不是投资建议。下单前请以券商行情和个人风控为准。",
     ]
     return "\n".join(lines)

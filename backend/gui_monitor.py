@@ -615,7 +615,7 @@ class MonitorApp:
             "status": "状态",
             "action": "信号",
             "price": "入场/现价",
-            "target": "目标价",
+            "target": "目标1/2/3",
             "stop": "止损价",
             "minute": "时间",
             "score": "评分",
@@ -627,7 +627,7 @@ class MonitorApp:
             "status": 82,
             "action": 100,
             "price": 72,
-            "target": 76,
+            "target": 112,
             "stop": 76,
             "minute": 70,
             "score": 64,
@@ -3895,7 +3895,7 @@ class MonitorApp:
                     item.get("status", "-"),
                     item.get("entry_label", "-") if status == "signal" else "-",
                     item.get("entry_price", item.get("last_price", "-")),
-                    item.get("exit_price", "-"),
+                    _target_ladder(item),
                     item.get("stop_price", "-"),
                     item.get("minute", "-"),
                     item.get("signal_score", "-"),
@@ -3909,8 +3909,8 @@ class MonitorApp:
                 if isinstance(alert, dict):
                     self._log(
                         f"信号：{alert.get('symbol')} {alert.get('signal_detail', alert.get('entry_label', ''))} "
-                        f"入场 {alert.get('entry_price')} {alert.get('exit_label', '目标')} {alert.get('exit_price')} "
-                        f"止损 {alert.get('stop_price')} "
+                        f"入场 {alert.get('entry_price')} {alert.get('exit_label', '目标')} "
+                        f"{_target_ladder(alert)} 参考风控 {alert.get('stop_price')} "
                         f"推送 {alert.get('notify_status', '-')}"
                     )
 
@@ -3918,6 +3918,15 @@ class MonitorApp:
         now = time.strftime("%H:%M:%S")
         self.log.insert(tk.END, f"[{now}] {message}\n")
         self.log.see(tk.END)
+
+
+def _target_ladder(item: dict[str, object]) -> str:
+    target1 = item.get("target1_price")
+    target2 = item.get("target2_price")
+    target3 = item.get("target3_price")
+    if target1 is not None and target2 is not None and target3 is not None:
+        return f"{target1}/{target2}/{target3}"
+    return str(item.get("exit_price", "-"))
 
 
 def main() -> None:
