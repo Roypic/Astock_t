@@ -436,7 +436,7 @@ class MonitorApp:
         self.weixin_mode_var = tk.StringVar(value="weixin")
         self.model_path_var = tk.StringVar(value=str(self.models_dir))
         self.interval_var = tk.StringVar(value=str(DEFAULT_INTERVAL_SECONDS))
-        self.news_watchlist_var = tk.StringVar(value="剑桥科技，东山精密，福晶科技，利通电子")
+        self.news_watchlist_var = tk.StringVar(value="剑桥科技，东山精密，福晶科技，利通电子，锡业股份")
         self.info_alert_var = tk.BooleanVar(value=True)
         self.market_alert_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="未启动")
@@ -798,6 +798,55 @@ class MonitorApp:
         if not parts:
             return "模型风险摘要：没有找到模型 JSON。"
         return "模型风险摘要：" + "  ".join(parts) + " 历史回测不代表未来收益，请小心使用。"
+
+    def _model_risk_summary_for_models(self, models: list[TModel]) -> str:
+        parts = []
+        for model in models:
+            backtest = {}
+            for file in self._model_files(Path(self.model_path_var.get().strip())):
+                try:
+                    data = json.loads(file.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if str(data.get("code")) == model.code:
+                    backtest = data.get("backtest") or {}
+                    break
+            if backtest:
+                parts.append(
+                    f"{model.name}：{backtest.get('window', '回测')}，{backtest.get('mode', '模型信号')}，"
+                    f"交易 {backtest.get('trade_count', '-')} 次，胜率 {backtest.get('win_rate_pct', '-')}%，"
+                    f"单次均值 {backtest.get('avg_result_pct', '-')}%，最大回撤 {backtest.get('max_drawdown_pct', '-')}%。"
+                )
+            else:
+                parts.append(f"{model.name}：未写入回测摘要，请谨慎使用。")
+        if not parts:
+            return "模型风险摘要：自选池没有匹配到模型。"
+        return "模型风险摘要：" + "  ".join(parts) + " 历史回测不代表未来收益，请小心使用。"
+
+    def _filter_models_by_watchlist(self, models: list[TModel]) -> list[TModel]:
+        tokens = self._watchlist_tokens()
+        if not tokens:
+            return models
+        filtered = []
+        for model in models:
+            code = self._normalize_ft_code(model.code)
+            raw_code = code.split(".", 1)[0]
+            if model.name in tokens or model.code in tokens or code in tokens or raw_code in tokens:
+                filtered.append(model)
+        return filtered
+
+    def _watchlist_tokens(self) -> set[str]:
+        text = self.news_watchlist_var.get().strip() if hasattr(self, "news_watchlist_var") else ""
+        tokens = {part.strip() for part in re.split(r"[,，;；\s]+", text) if part.strip()}
+        expanded = set(tokens)
+        for token in tokens:
+            code = self._resolve_stock_code(token)
+            if code:
+                normalized = self._normalize_ft_code(code)
+                expanded.add(code)
+                expanded.add(normalized)
+                expanded.add(normalized.split(".", 1)[0])
+        return expanded
 
     def _test_push(self) -> None:
         token = self.token_var.get().strip()
@@ -2536,9 +2585,13 @@ class MonitorApp:
 
     def _run_worker(self, model_path: Path, token: str, weixin_mode: str, interval: int) -> None:
         try:
-            models = load_models(model_path)
+            all_models = load_models(model_path)
+            models = self._filter_models_by_watchlist(all_models)
+            if not models:
+                self.queue.put(("error", "自选监控池没有匹配到可用做T模型；请确认股票名/代码，或清空自选池以监控全部模型。"))
+                return
             self.queue.put(("log", f"已加载 {len(models)} 个模型：" + "、".join(m.name for m in models)))
-            self.queue.put(("risk", self._model_risk_summary(model_path)))
+            self.queue.put(("risk", self._model_risk_summary_for_models(models)))
             engine = ModelSignalEngine(models, app_dir() / "data", token, weixin_mode)
         except Exception as exc:
             self.queue.put(("error", str(exc)))
@@ -3191,7 +3244,7 @@ class MonitorApp:
 
     def _run_market_weak_worker(self, model_path: Path, token: str, weixin_mode: str) -> None:
         try:
-            models = load_models(model_path)
+            models = self._filter_models_by_watchlist(load_models(model_path))
             client = MarketClient(ttl_seconds=60)
         except Exception as exc:
             self.queue.put(("log", f"大盘/板块走弱提醒启动失败：{exc}"))
