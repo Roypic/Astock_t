@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -154,9 +155,21 @@ class MonitorWindow(QMainWindow):
         self.timer.start(250)
 
     def _build_ui(self) -> None:
+        shell = QWidget()
+        shell.setObjectName("root")
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setObjectName("mainScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         root = QWidget()
-        root.setObjectName("root")
-        self.setCentralWidget(root)
+        root.setObjectName("contentRoot")
+        scroll.setWidget(root)
+        shell_layout.addWidget(scroll)
+        self.setCentralWidget(shell)
+
         page = QVBoxLayout(root)
         page.setContentsMargins(22, 22, 22, 18)
         page.setSpacing(16)
@@ -275,22 +288,61 @@ class MonitorWindow(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(9, QHeaderView.Stretch)
         self.table.setAlternatingRowColors(True)
-        page.addWidget(self.table, 1)
+        self.table.setMinimumHeight(290)
+        page.addWidget(self.table)
 
         self.log = QTextEdit()
         self.log.setObjectName("log")
         self.log.setReadOnly(True)
         self.log.setMinimumHeight(150)
+        self.log.setMaximumHeight(240)
         page.addWidget(self.log)
 
     def _apply_style(self) -> None:
         self.setFont(QFont("Microsoft YaHei UI", 10))
         self.setStyleSheet(
             """
-            QWidget#root {
+            QWidget#root, QWidget#contentRoot, QScrollArea#mainScroll {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                     stop:0 #edf7ff, stop:0.45 #dfefff, stop:1 #f7fbff);
                 color: #172437;
+            }
+            QScrollArea#mainScroll {
+                border: 0px;
+            }
+            QScrollBar:vertical {
+                background: rgba(255, 255, 255, 95);
+                width: 12px;
+                margin: 10px 3px 10px 3px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(45, 140, 255, 135);
+                min-height: 48px;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: rgba(23, 103, 212, 180);
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent;
+            }
+            QScrollBar:horizontal {
+                background: rgba(255, 255, 255, 95);
+                height: 12px;
+                margin: 3px 10px 3px 10px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:horizontal {
+                background: rgba(45, 140, 255, 135);
+                min-width: 48px;
+                border-radius: 5px;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
             }
             QFrame#hero {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
