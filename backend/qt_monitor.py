@@ -51,6 +51,8 @@ except Exception:
 DEFAULT_INTERVAL_SECONDS = 30
 PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/push1.html"
 RELEASE_URL = "https://github.com/Roypic/Astock_t/releases"
+WINDOWS_EXE_URL = "https://github.com/Roypic/Astock_t/releases/download/windows-latest/AShareTSignalMonitor.exe"
+MACOS_ZIP_URL = "https://github.com/Roypic/Astock_t/releases/download/macos-latest/AShareTSignalMonitor-macOS.zip"
 
 
 def app_dir() -> Path:
@@ -253,7 +255,7 @@ class MonitorWindow(QMainWindow):
         self.open_push_btn = ModernButton("打开 PushPlus", "ghost")
         self.weixin_login_btn = ModernButton("微信登录", "ghost")
         self.weixin_session_btn = ModernButton("刷新会话", "ghost")
-        self.update_btn = ModernButton("下载最新版", "ghost")
+        self.update_btn = ModernButton("直接下载新版", "ghost")
         self.stop_btn.setEnabled(False)
         self.start_btn.clicked.connect(self._start)
         self.stop_btn.clicked.connect(self._stop)
@@ -261,7 +263,7 @@ class MonitorWindow(QMainWindow):
         self.open_push_btn.clicked.connect(lambda: webbrowser.open(PUSHPLUS_TOKEN_URL))
         self.weixin_login_btn.clicked.connect(self._start_weixin_login)
         self.weixin_session_btn.clicked.connect(self._start_weixin_session)
-        self.update_btn.clicked.connect(lambda: webbrowser.open(RELEASE_URL))
+        self.update_btn.clicked.connect(self._open_latest_download)
         buttons = [
             self.start_btn,
             self.stop_btn,
@@ -477,6 +479,19 @@ class MonitorWindow(QMainWindow):
         if path:
             self.model_path.setText(path)
             self._refresh_risk_summary()
+
+    def _open_latest_download(self) -> None:
+        if sys.platform == "win32":
+            url = WINDOWS_EXE_URL
+            label = "Windows EXE"
+        elif sys.platform == "darwin":
+            url = MACOS_ZIP_URL
+            label = "macOS ZIP"
+        else:
+            url = RELEASE_URL
+            label = "Release 页面"
+        self._log(f"正在打开最新版下载：{label}")
+        webbrowser.open(url)
 
     def _model_files(self, model_path: Path) -> list[Path]:
         if model_path.is_file():
