@@ -446,30 +446,33 @@ MARKET_ALERT_RETURN_STEP = 0.004
 MARKET_ALERT_MOMENTUM_STEP = 0.003
 MARKET_ALERT_TURN_MOMENTUM = 0.0015
 COLORS = {
-    "bg": "#F2F5FA",
-    "card": "#FFFFFF",
-    "card_soft": "#F7FAFF",
-    "text": "#1F2D3D",
-    "muted": "#65758B",
-    "line": "#D6E0EE",
-    "sage": "#1D5FA7",
-    "sage_dark": "#0B3A75",
+    "bg": "#EAF3FF",
+    "card": "#F8FBFF",
+    "card_soft": "#EEF7FF",
+    "text": "#172437",
+    "muted": "#5B708A",
+    "line": "#C6D8EE",
+    "sage": "#2478E8",
+    "sage_dark": "#0B4EA2",
     "coral": "#D71920",
     "coral_dark": "#B00020",
-    "mint": "#EAF3FF",
+    "mint": "#DDEEFF",
     "cream": "#FFF4E5",
     "danger": "#D71920",
     "green": "#098A4A",
     "green_soft": "#EAF8F0",
     "red_soft": "#FFF0F0",
-    "header": "#0B3A75",
-    "header_soft": "#DCEBFF",
-    "header_deep": "#061A33",
-    "surface": "#ECF3FC",
-    "shadow": "#C8D5E6",
+    "header": "#135BC2",
+    "header_soft": "#DDEEFF",
+    "header_deep": "#061326",
+    "surface": "#DFECFA",
+    "shadow": "#B6C8DC",
     "gold": "#F5B342",
-    "terminal": "#081C33",
-    "terminal_grid": "#16324F",
+    "glass": "#F4FAFF",
+    "glass_edge": "#FFFFFF",
+    "glow": "#8EC7FF",
+    "terminal": "#07192D",
+    "terminal_grid": "#173755",
 }
 
 
@@ -597,29 +600,29 @@ class MonitorApp:
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(".", font=("Microsoft YaHei UI", 10), background=COLORS["bg"], foreground=COLORS["text"])
-        style.configure("Card.TFrame", background=COLORS["card"], relief="solid", borderwidth=1, bordercolor=COLORS["line"])
+        style.configure("Card.TFrame", background=COLORS["card"], relief="solid", borderwidth=1, bordercolor=COLORS["glass_edge"])
         style.configure("Soft.TFrame", background=COLORS["card_soft"], relief="solid", borderwidth=1, bordercolor=COLORS["line"])
         style.configure("Muted.TLabel", background=COLORS["card"], foreground=COLORS["muted"])
         style.configure("Title.TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=("Microsoft YaHei UI", 20, "bold"))
         style.configure("Subtitle.TLabel", background=COLORS["bg"], foreground=COLORS["muted"], font=("Microsoft YaHei UI", 9))
         style.configure("CardTitle.TLabel", background=COLORS["card"], foreground=COLORS["sage_dark"], font=("Microsoft YaHei UI", 11, "bold"))
-        style.configure("TEntry", fieldbackground="#FFFFFF", bordercolor=COLORS["line"], lightcolor=COLORS["line"], darkcolor=COLORS["line"], padding=8)
+        style.configure("TEntry", fieldbackground="#FFFFFF", bordercolor=COLORS["line"], lightcolor=COLORS["glass_edge"], darkcolor=COLORS["line"], padding=8)
         style.configure("Primary.TButton", background=COLORS["sage"], foreground="#FFFFFF", bordercolor=COLORS["sage"], focusthickness=0, padding=(14, 9), font=("Microsoft YaHei UI", 10, "bold"))
         style.map("Primary.TButton", background=[("active", COLORS["sage_dark"]), ("disabled", COLORS["line"])])
         style.configure("Warm.TButton", background=COLORS["coral"], foreground="#FFFFFF", bordercolor=COLORS["coral"], focusthickness=0, padding=(14, 9), font=("Microsoft YaHei UI", 10, "bold"))
         style.map("Warm.TButton", background=[("active", COLORS["coral_dark"]), ("disabled", COLORS["line"])])
         style.configure("Ghost.TButton", background="#FFFFFF", foreground=COLORS["sage_dark"], bordercolor=COLORS["line"], focusthickness=0, padding=(12, 8))
         style.map("Ghost.TButton", background=[("active", COLORS["mint"])], foreground=[("active", COLORS["sage_dark"])])
-        style.configure("Treeview", background="#FFFFFF", fieldbackground="#FFFFFF", foreground=COLORS["text"], rowheight=29, bordercolor=COLORS["line"], lightcolor=COLORS["line"], darkcolor=COLORS["line"])
+        style.configure("Treeview", background="#FBFDFF", fieldbackground="#FBFDFF", foreground=COLORS["text"], rowheight=29, bordercolor=COLORS["line"], lightcolor=COLORS["glass_edge"], darkcolor=COLORS["line"])
         style.configure("Treeview.Heading", background=COLORS["header"], foreground="#FFFFFF", relief="flat", padding=(8, 7), font=("Microsoft YaHei UI", 9, "bold"))
         style.map("Treeview", background=[("selected", COLORS["sage"])], foreground=[("selected", "#FFFFFF")])
 
     def _flat_button(self, parent: tk.Widget, text: str, command: Callable[[], None], kind: str = "ghost") -> tk.Button:
         palette = {
-            "primary": (COLORS["sage"], "#FFFFFF", COLORS["sage_dark"]),
+            "primary": ("#2D8CFF", "#FFFFFF", COLORS["sage_dark"]),
             "warm": (COLORS["coral"], "#FFFFFF", COLORS["coral_dark"]),
-            "ghost": ("#FFFFFF", COLORS["sage_dark"], COLORS["mint"]),
-            "dark": (COLORS["header_deep"], "#FFFFFF", COLORS["header"]),
+            "ghost": ("#F7FBFF", COLORS["sage_dark"], COLORS["mint"]),
+            "dark": ("#102D55", "#FFFFFF", COLORS["header"]),
         }
         bg, fg, active = palette.get(kind, palette["ghost"])
         return tk.Button(
@@ -637,7 +640,7 @@ class MonitorApp:
             cursor="hand2",
             font=("Microsoft YaHei UI", 9, "bold" if kind in {"primary", "warm"} else "normal"),
             highlightthickness=1,
-            highlightbackground=COLORS["line"],
+            highlightbackground=COLORS["glass_edge"],
         )
 
     def _chip(self, parent: tk.Widget, text: str, bg: str, fg: str) -> tk.Label:
@@ -653,7 +656,7 @@ class MonitorApp:
 
     def _card_title(self, parent: tk.Widget, text: str, subtitle: str = "") -> tk.Frame:
         bar = tk.Frame(parent, bg=COLORS["card"])
-        accent = tk.Frame(bar, bg=COLORS["sage"], width=4, height=24)
+        accent = tk.Frame(bar, bg=COLORS["glow"], width=4, height=24)
         accent.pack(side=tk.LEFT, padx=(0, 8), pady=(0, 8))
         copy = tk.Frame(bar, bg=COLORS["card"])
         copy.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=(0, 8))
@@ -676,7 +679,7 @@ class MonitorApp:
         outer.bind("<Configure>", self._update_main_scrollregion)
         self.main_canvas.bind("<Configure>", self._resize_main_window)
 
-        header = tk.Frame(outer, bg=COLORS["header_deep"], highlightthickness=1, highlightbackground=COLORS["sage_dark"])
+        header = tk.Frame(outer, bg=COLORS["header_deep"], highlightthickness=1, highlightbackground=COLORS["glow"])
         header.pack(fill=tk.X, pady=(0, 14))
         header.columnconfigure(0, weight=1)
         title_block = tk.Frame(header, bg=COLORS["header_deep"])
@@ -686,7 +689,7 @@ class MonitorApp:
             text="A股做T行情终端",
             bg=COLORS["header_deep"],
             fg="#FFFFFF",
-            font=("Microsoft YaHei UI", 21, "bold"),
+            font=("Microsoft YaHei UI", 22, "bold"),
         ).pack(anchor=tk.W)
         tk.Label(
             title_block,
@@ -714,7 +717,7 @@ class MonitorApp:
         self.status_badge = tk.Label(
             form,
             textvariable=self.status_var,
-            bg=COLORS["mint"],
+            bg="#EAF6FF",
             fg=COLORS["sage_dark"],
             padx=12,
             pady=5,
@@ -741,7 +744,7 @@ class MonitorApp:
         self.risk_label = tk.Label(
             form,
             textvariable=self.risk_var,
-            bg=COLORS["cream"],
+            bg="#FFF8E8",
             fg=COLORS["coral_dark"],
             justify=tk.LEFT,
             anchor=tk.W,
@@ -864,8 +867,8 @@ class MonitorApp:
         for col in columns:
             self.table.heading(col, text=headings[col])
             self.table.column(col, width=widths[col], anchor=tk.W)
-        self.table.tag_configure("even", background="#FFFFFF")
-        self.table.tag_configure("odd", background="#F7FAFF")
+        self.table.tag_configure("even", background="#FBFDFF")
+        self.table.tag_configure("odd", background="#F1F8FF")
         self.table.tag_configure("signal", background=COLORS["red_soft"], foreground=COLORS["coral_dark"])
         self.table.tag_configure("error", background=COLORS["red_soft"], foreground=COLORS["danger"])
         self.table.grid(row=0, column=0, sticky=tk.NSEW)
@@ -883,9 +886,9 @@ class MonitorApp:
             log_body,
             height=7,
             wrap=tk.WORD,
-            bg=COLORS["terminal"],
-            fg="#DCEBFF",
-            insertbackground="#DCEBFF",
+            bg="#061326",
+            fg="#DDEEFF",
+            insertbackground="#DDEEFF",
             relief=tk.FLAT,
             padx=12,
             pady=10,
@@ -1420,7 +1423,7 @@ class MonitorApp:
         window.geometry("1040x720")
         window.configure(bg=COLORS["bg"])
 
-        header = tk.Frame(window, bg=COLORS["header_deep"], highlightthickness=1, highlightbackground=COLORS["sage_dark"])
+        header = tk.Frame(window, bg=COLORS["header_deep"], highlightthickness=1, highlightbackground=COLORS["glow"])
         header.pack(fill=tk.X, padx=12, pady=(12, 8))
         tk.Label(
             header,
@@ -1451,13 +1454,13 @@ class MonitorApp:
         period_box = ttk.Combobox(panel, textvariable=period_var, values=("分时", "日线", "周线", "月线"), width=8, state="readonly")
         period_box.grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
 
-        canvas = tk.Canvas(window, bg=COLORS["terminal"], highlightthickness=1, highlightbackground=COLORS["sage_dark"])
+        canvas = tk.Canvas(window, bg=COLORS["terminal"], highlightthickness=1, highlightbackground=COLORS["glow"])
         canvas.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
         summary = tk.Text(
             window,
             height=10,
             wrap=tk.WORD,
-            bg="#FFFFFF",
+            bg=COLORS["glass"],
             fg=COLORS["text"],
             relief=tk.FLAT,
             padx=12,
@@ -1727,7 +1730,9 @@ class MonitorApp:
         width = max(760, canvas.winfo_width())
         height = max(380, canvas.winfo_height())
         canvas.delete("all")
-        canvas.create_rectangle(0, 0, width, height, fill=COLORS["terminal"], outline=COLORS["sage_dark"])
+        canvas.create_rectangle(0, 0, width, height, fill=COLORS["terminal"], outline=COLORS["glow"])
+        canvas.create_rectangle(8, 8, width - 8, height - 8, fill="", outline="#1B4B7D")
+        canvas.create_line(12, 12, width - 12, 12, fill="#2E75B8")
         pad_left, pad_right, pad_top, pad_bottom = 62, 96, 42, 44
         lows = [float(row.get("low") or row["close"]) for row in rows]
         highs = [float(row.get("high") or row["close"]) for row in rows]
@@ -1764,6 +1769,7 @@ class MonitorApp:
                 x = x_at(index)
                 canvas.create_line(x, y_at(float(row.get("low") or row["close"])), x, y_at(float(row.get("high") or row["close"])), fill="#607D9C")
         if len(points) >= 4:
+            canvas.create_line(*points, fill="#164D86", width=7, smooth=True)
             canvas.create_line(*points, fill="#6DB7FF", width=3, smooth=True)
             canvas.create_line(*points, fill="#D8ECFF", width=1, smooth=True)
 
