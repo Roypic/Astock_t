@@ -2824,20 +2824,32 @@ class MonitorApp:
         limit: int = 5,
         candidate_limit: int = 24,
     ) -> list[dict[str, object]]:
-        candidates = self._search_news(query, start, end, limit=candidate_limit)
+        try:
+            candidates = self._search_news(query, start, end, limit=candidate_limit)
+        except Exception as exc:
+            self.queue.put(("log", f"FTShare 新闻接口异常，精准搜索已降级到备用源：{exc}"))
+            candidates = self._fallback_news_items(query, start, end, limit=max(candidate_limit, limit))
         return self._rerank_news(query, candidates, limit=limit)
 
     def _search_broad_news(self, query: str, start: datetime, end: datetime) -> list[dict[str, object]]:
         queries = self._broad_news_queries(query)
         seen = set()
         results = []
+        ftshare_disabled = False
+        ftshare_error = ""
+        google_failures = 0
+        bing_failures = 0
         for index, search_query in enumerate(queries):
             per_limit = 24 if index == 0 else 12
-            try:
-                items = self._search_news(search_query, start, end, limit=per_limit)
-            except Exception as exc:
-                self.queue.put(("log", f"宽泛搜索子查询失败：{search_query}｜{exc}"))
-                items = []
+            items: list[dict[str, object]] = []
+            if not ftshare_disabled:
+                try:
+                    items = self._search_news(search_query, start, end, limit=per_limit)
+                except Exception as exc:
+                    ftshare_disabled = True
+                    ftshare_error = str(exc)
+                    items = []
+                    self.queue.put(("log", f"FTShare 新闻接口异常，本轮宽泛搜索已切到备用源：{ftshare_error}"))
             for item in items:
                 key = item.get("article_url") or item.get("news_id") or item.get("title")
                 if key in seen:
@@ -2849,8 +2861,8 @@ class MonitorApp:
                 results.append(copied)
             try:
                 rss_items = self._search_google_news_rss(search_query, start, end, limit=per_limit)
-            except Exception as exc:
-                self.queue.put(("log", f"Google News RSS 子查询失败：{search_query}｜{exc}"))
+            except Exception:
+                google_failures += 1
                 rss_items = []
             for item in rss_items:
                 key = item.get("article_url") or item.get("news_id") or item.get("title")
@@ -2859,7 +2871,39 @@ class MonitorApp:
                 seen.add(key)
                 item["_query"] = search_query
                 results.append(item)
+            try:
+                bing_items = self._search_bing_web(search_query, start, end, limit=min(8, per_limit))
+            except Exception:
+                bing_failures += 1
+                bing_items = []
+            for item in bing_items:
+                key = item.get("article_url") or item.get("news_id") or item.get("title")
+                if key in seen:
+                    continue
+                seen.add(key)
+                item["_query"] = search_query
+                results.append(item)
+        if google_failures:
+            self.queue.put(("log", f"Google News RSS 备用源失败 {google_failures} 个子查询，已继续使用其他来源。"))
+        if bing_failures:
+            self.queue.put(("log", f"Bing Web 备用源失败 {bing_failures} 个子查询，已继续使用其他来源。"))
         return results
+
+    def _fallback_news_items(self, query: str, start: datetime, end: datetime, limit: int = 24) -> list[dict[str, object]]:
+        seen = set()
+        rows = []
+        for fetcher in (self._search_google_news_rss, self._search_bing_web):
+            try:
+                items = fetcher(query, start, end, limit=limit)
+            except Exception:
+                items = []
+            for item in items:
+                key = item.get("article_url") or item.get("news_id") or item.get("title")
+                if key in seen:
+                    continue
+                seen.add(key)
+                rows.append(item)
+        return rows
 
     def _search_google_news_rss(
         self,
