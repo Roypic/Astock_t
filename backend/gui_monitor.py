@@ -52,7 +52,7 @@ LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/late
 RELEASE_PAGE_URL = "https://github.com/Roypic/Astock_t/releases/latest"
 WINDOWS_LATEST_EXE_URL = "https://github.com/Roypic/Astock_t/releases/download/windows-latest/AShareTSignalMonitor.exe"
 EXE_ASSET_NAME = "AShareTSignalMonitor.exe"
-DESKTOP_SHORTCUT_NAME = "A股做T信号监控.lnk"
+DESKTOP_SHORTCUT_NAME = "A股做T行情终端.lnk"
 GITHUB_DOWNLOAD_MIRRORS = (
     "https://gh.llkk.cc/",
     "https://ghproxy.net/",
@@ -445,19 +445,25 @@ MARKET_ALERT_RETURN_STEP = 0.004
 MARKET_ALERT_MOMENTUM_STEP = 0.003
 MARKET_ALERT_TURN_MOMENTUM = 0.0015
 COLORS = {
-    "bg": "#F6F3EC",
-    "card": "#FFFDF7",
-    "card_soft": "#FDF8EE",
-    "text": "#2F3834",
-    "muted": "#748079",
-    "line": "#E7DDCF",
-    "sage": "#6E927C",
-    "sage_dark": "#527261",
-    "coral": "#D87A68",
-    "coral_dark": "#BE6352",
-    "mint": "#DDECE3",
-    "cream": "#FFF7DF",
-    "danger": "#B45C5C",
+    "bg": "#F2F5FA",
+    "card": "#FFFFFF",
+    "card_soft": "#F7FAFF",
+    "text": "#1F2D3D",
+    "muted": "#65758B",
+    "line": "#D6E0EE",
+    "sage": "#1D5FA7",
+    "sage_dark": "#0B3A75",
+    "coral": "#D71920",
+    "coral_dark": "#B00020",
+    "mint": "#EAF3FF",
+    "cream": "#FFF4E5",
+    "danger": "#D71920",
+    "green": "#098A4A",
+    "green_soft": "#EAF8F0",
+    "red_soft": "#FFF0F0",
+    "header": "#0B3A75",
+    "header_soft": "#DCEBFF",
+    "terminal": "#081C33",
 }
 
 
@@ -506,7 +512,7 @@ def create_windows_desktop_shortcut(target_exe: Path | None = None) -> Path:
             f"$shortcut.TargetPath = {ps_quote(str(target))}",
             f"$shortcut.WorkingDirectory = {ps_quote(str(target.parent))}",
             f"$shortcut.IconLocation = {ps_quote(str(target) + ',0')}",
-            "$shortcut.Description = 'A股做T信号监控'",
+            "$shortcut.Description = 'A股做T行情终端'",
             "$shortcut.Save()",
             "Write-Output $shortcutPath",
         ]
@@ -538,7 +544,7 @@ def startup_log_path() -> Path:
 class MonitorApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        self.root.title("A股做T信号监控")
+        self.root.title("A股做T行情终端")
         self.root.geometry("1060x780")
         self.root.minsize(940, 680)
         self.root.configure(bg=COLORS["bg"])
@@ -585,21 +591,21 @@ class MonitorApp:
         style = ttk.Style()
         style.theme_use("clam")
         style.configure(".", font=("Microsoft YaHei UI", 10), background=COLORS["bg"], foreground=COLORS["text"])
-        style.configure("Card.TFrame", background=COLORS["card"], relief="flat")
-        style.configure("Soft.TFrame", background=COLORS["card_soft"], relief="flat")
+        style.configure("Card.TFrame", background=COLORS["card"], relief="solid", borderwidth=1, bordercolor=COLORS["line"])
+        style.configure("Soft.TFrame", background=COLORS["card_soft"], relief="solid", borderwidth=1, bordercolor=COLORS["line"])
         style.configure("Muted.TLabel", background=COLORS["card"], foreground=COLORS["muted"])
-        style.configure("Title.TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=("Microsoft YaHei UI", 22, "bold"))
-        style.configure("Subtitle.TLabel", background=COLORS["bg"], foreground=COLORS["muted"], font=("Microsoft YaHei UI", 10))
-        style.configure("CardTitle.TLabel", background=COLORS["card"], foreground=COLORS["text"], font=("Microsoft YaHei UI", 12, "bold"))
+        style.configure("Title.TLabel", background=COLORS["bg"], foreground=COLORS["text"], font=("Microsoft YaHei UI", 20, "bold"))
+        style.configure("Subtitle.TLabel", background=COLORS["bg"], foreground=COLORS["muted"], font=("Microsoft YaHei UI", 9))
+        style.configure("CardTitle.TLabel", background=COLORS["card"], foreground=COLORS["sage_dark"], font=("Microsoft YaHei UI", 11, "bold"))
         style.configure("TEntry", fieldbackground="#FFFFFF", bordercolor=COLORS["line"], lightcolor=COLORS["line"], darkcolor=COLORS["line"], padding=8)
         style.configure("Primary.TButton", background=COLORS["sage"], foreground="#FFFFFF", bordercolor=COLORS["sage"], focusthickness=0, padding=(14, 9), font=("Microsoft YaHei UI", 10, "bold"))
         style.map("Primary.TButton", background=[("active", COLORS["sage_dark"]), ("disabled", COLORS["line"])])
         style.configure("Warm.TButton", background=COLORS["coral"], foreground="#FFFFFF", bordercolor=COLORS["coral"], focusthickness=0, padding=(14, 9), font=("Microsoft YaHei UI", 10, "bold"))
         style.map("Warm.TButton", background=[("active", COLORS["coral_dark"]), ("disabled", COLORS["line"])])
-        style.configure("Ghost.TButton", background=COLORS["card_soft"], foreground=COLORS["text"], bordercolor=COLORS["line"], focusthickness=0, padding=(12, 8))
-        style.map("Ghost.TButton", background=[("active", COLORS["mint"])])
-        style.configure("Treeview", background="#FFFDF7", fieldbackground="#FFFDF7", foreground=COLORS["text"], rowheight=34, bordercolor=COLORS["line"], lightcolor=COLORS["line"], darkcolor=COLORS["line"])
-        style.configure("Treeview.Heading", background=COLORS["mint"], foreground=COLORS["text"], relief="flat", padding=(8, 8), font=("Microsoft YaHei UI", 10, "bold"))
+        style.configure("Ghost.TButton", background="#FFFFFF", foreground=COLORS["sage_dark"], bordercolor=COLORS["line"], focusthickness=0, padding=(12, 8))
+        style.map("Ghost.TButton", background=[("active", COLORS["mint"])], foreground=[("active", COLORS["sage_dark"])])
+        style.configure("Treeview", background="#FFFFFF", fieldbackground="#FFFFFF", foreground=COLORS["text"], rowheight=29, bordercolor=COLORS["line"], lightcolor=COLORS["line"], darkcolor=COLORS["line"])
+        style.configure("Treeview.Heading", background=COLORS["header"], foreground="#FFFFFF", relief="flat", padding=(8, 7), font=("Microsoft YaHei UI", 9, "bold"))
         style.map("Treeview", background=[("selected", COLORS["sage"])], foreground=[("selected", "#FFFFFF")])
 
     def _build_ui(self) -> None:
@@ -616,15 +622,27 @@ class MonitorApp:
         outer.bind("<Configure>", self._update_main_scrollregion)
         self.main_canvas.bind("<Configure>", self._resize_main_window)
 
-        header = ttk.Frame(outer)
+        header = tk.Frame(outer, bg=COLORS["header"], highlightthickness=1, highlightbackground=COLORS["sage_dark"])
         header.pack(fill=tk.X, pady=(0, 14))
         header.columnconfigure(0, weight=1)
-        title_block = ttk.Frame(header)
-        title_block.grid(row=0, column=0, sticky=tk.W)
-        ttk.Label(title_block, text="A股做T信号监控", style="Title.TLabel").pack(anchor=tk.W)
-        ttk.Label(title_block, text="模型驱动的盘中提醒，界面观察 + 微信推送", style="Subtitle.TLabel").pack(anchor=tk.W, pady=(4, 0))
-        self.mascot = tk.Canvas(header, width=170, height=92, bg=COLORS["bg"], highlightthickness=0, cursor="hand2")
-        self.mascot.grid(row=0, column=1, sticky=tk.E)
+        title_block = tk.Frame(header, bg=COLORS["header"])
+        title_block.grid(row=0, column=0, sticky=tk.W, padx=18, pady=14)
+        tk.Label(
+            title_block,
+            text="A股做T行情终端",
+            bg=COLORS["header"],
+            fg="#FFFFFF",
+            font=("Microsoft YaHei UI", 21, "bold"),
+        ).pack(anchor=tk.W)
+        tk.Label(
+            title_block,
+            text="自选行情｜盘中做T信号｜信息面雷达｜微信推送",
+            bg=COLORS["header"],
+            fg=COLORS["header_soft"],
+            font=("Microsoft YaHei UI", 9),
+        ).pack(anchor=tk.W, pady=(4, 0))
+        self.mascot = tk.Canvas(header, width=150, height=78, bg=COLORS["header"], highlightthickness=0, cursor="hand2")
+        self.mascot.grid(row=0, column=1, sticky=tk.E, padx=(0, 12), pady=8)
         self.mascot.bind("<Button-1>", self._mascot_jump_away)
         self._animate_mascot()
 
@@ -636,7 +654,7 @@ class MonitorApp:
         self.status_badge = tk.Label(
             form,
             textvariable=self.status_var,
-            bg=COLORS["cream"],
+            bg=COLORS["mint"],
             fg=COLORS["sage_dark"],
             padx=12,
             pady=5,
@@ -786,10 +804,10 @@ class MonitorApp:
         for col in columns:
             self.table.heading(col, text=headings[col])
             self.table.column(col, width=widths[col], anchor=tk.W)
-        self.table.tag_configure("even", background="#FFFDF7")
-        self.table.tag_configure("odd", background="#F8F1E6")
-        self.table.tag_configure("signal", background="#FBE3DA", foreground=COLORS["coral_dark"])
-        self.table.tag_configure("error", background="#F5DDDD", foreground=COLORS["danger"])
+        self.table.tag_configure("even", background="#FFFFFF")
+        self.table.tag_configure("odd", background="#F7FAFF")
+        self.table.tag_configure("signal", background=COLORS["red_soft"], foreground=COLORS["coral_dark"])
+        self.table.tag_configure("error", background=COLORS["red_soft"], foreground=COLORS["danger"])
         self.table.grid(row=0, column=0, sticky=tk.NSEW)
         table_y.grid(row=0, column=1, sticky=tk.NS)
         table_x.grid(row=1, column=0, sticky=tk.EW)
@@ -805,9 +823,9 @@ class MonitorApp:
             log_body,
             height=7,
             wrap=tk.WORD,
-            bg="#2F3834",
-            fg="#F9F4E8",
-            insertbackground="#F9F4E8",
+            bg=COLORS["terminal"],
+            fg="#DCEBFF",
+            insertbackground="#DCEBFF",
             relief=tk.FLAT,
             padx=12,
             pady=10,
@@ -1338,12 +1356,29 @@ class MonitorApp:
 
     def _open_watch_chart_window(self) -> None:
         window = tk.Toplevel(self.root)
-        window.title("自选走势")
-        window.geometry("980x680")
+        window.title("自选行情走势")
+        window.geometry("1040x720")
         window.configure(bg=COLORS["bg"])
 
-        panel = ttk.Frame(window, style="Card.TFrame", padding=14)
-        panel.pack(fill=tk.X, padx=14, pady=(14, 8))
+        header = tk.Frame(window, bg=COLORS["header"], highlightthickness=1, highlightbackground=COLORS["sage_dark"])
+        header.pack(fill=tk.X, padx=12, pady=(12, 8))
+        tk.Label(
+            header,
+            text="自选行情走势",
+            bg=COLORS["header"],
+            fg="#FFFFFF",
+            font=("Microsoft YaHei UI", 14, "bold"),
+        ).pack(side=tk.LEFT, padx=12, pady=10)
+        tk.Label(
+            header,
+            text="分时 / K线 / 支撑压力 / 筹码密集区 / 五档盘口",
+            bg=COLORS["header"],
+            fg=COLORS["header_soft"],
+            font=("Microsoft YaHei UI", 9),
+        ).pack(side=tk.LEFT, padx=(2, 0), pady=10)
+
+        panel = ttk.Frame(window, style="Card.TFrame", padding=12)
+        panel.pack(fill=tk.X, padx=12, pady=(0, 8))
         panel.columnconfigure(1, weight=1)
 
         query_var = tk.StringVar(value="剑桥科技")
@@ -1356,10 +1391,20 @@ class MonitorApp:
         period_box = ttk.Combobox(panel, textvariable=period_var, values=("分时", "日线", "周线", "月线"), width=8, state="readonly")
         period_box.grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
 
-        canvas = tk.Canvas(window, bg=COLORS["card"], highlightthickness=0)
-        canvas.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
-        summary = tk.Text(window, height=10, wrap=tk.WORD, bg=COLORS["card_soft"], fg=COLORS["text"], relief=tk.FLAT, padx=12, pady=10, font=("Microsoft YaHei UI", 9))
-        summary.pack(fill=tk.X, padx=14, pady=(0, 8))
+        canvas = tk.Canvas(window, bg=COLORS["card"], highlightthickness=1, highlightbackground=COLORS["line"])
+        canvas.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
+        summary = tk.Text(
+            window,
+            height=10,
+            wrap=tk.WORD,
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            relief=tk.FLAT,
+            padx=12,
+            pady=10,
+            font=("Microsoft YaHei UI", 9),
+        )
+        summary.pack(fill=tk.X, padx=12, pady=(0, 8))
         tk.Label(window, textvariable=status_var, bg=COLORS["bg"], fg=COLORS["muted"], anchor=tk.W, font=("Microsoft YaHei UI", 9)).pack(fill=tk.X, padx=16, pady=(0, 10))
 
         def run_chart() -> None:
@@ -1622,7 +1667,8 @@ class MonitorApp:
         width = max(760, canvas.winfo_width())
         height = max(380, canvas.winfo_height())
         canvas.delete("all")
-        pad_left, pad_right, pad_top, pad_bottom = 58, 86, 34, 42
+        canvas.create_rectangle(0, 0, width, height, fill="#FFFFFF", outline=COLORS["line"])
+        pad_left, pad_right, pad_top, pad_bottom = 62, 96, 42, 44
         lows = [float(row.get("low") or row["close"]) for row in rows]
         highs = [float(row.get("high") or row["close"]) for row in rows]
         support_values = levels.get("supports")
@@ -1645,15 +1691,18 @@ class MonitorApp:
         for i in range(5):
             y = pad_top + i * (height - pad_top - pad_bottom) / 4
             price = max_price - i * (max_price - min_price) / 4
-            canvas.create_line(pad_left, y, width - pad_right, y, fill="#E7DED0")
+            canvas.create_line(pad_left, y, width - pad_right, y, fill=COLORS["line"])
             canvas.create_text(12, y, text=f"{price:.2f}", anchor=tk.W, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
+        for i in range(5):
+            x = pad_left + i * (width - pad_left - pad_right) / 4
+            canvas.create_line(x, pad_top, x, height - pad_bottom, fill="#EEF3FA")
 
         points = []
         for index, row in enumerate(rows):
             points.extend([x_at(index), y_at(float(row["close"]))])
             if period != "分时":
                 x = x_at(index)
-                canvas.create_line(x, y_at(float(row.get("low") or row["close"])), x, y_at(float(row.get("high") or row["close"])), fill="#B8C9BD")
+                canvas.create_line(x, y_at(float(row.get("low") or row["close"])), x, y_at(float(row.get("high") or row["close"])), fill="#90A4BE")
         if len(points) >= 4:
             canvas.create_line(*points, fill=COLORS["sage_dark"], width=2, smooth=True)
 
@@ -1662,14 +1711,18 @@ class MonitorApp:
             line_specs.append((f"压{index}", price, COLORS["danger"]))
         line_specs.append(("筹码峰", float(levels["chip_peak"]), COLORS["coral"]))
         for index, price in enumerate(supports[:3], start=1):
-            line_specs.append((f"支{index}", price, COLORS["sage_dark"]))
+            line_specs.append((f"支{index}", price, COLORS["green"]))
         for label, price, color in line_specs:
             y = y_at(price)
             canvas.create_line(pad_left, y, width - pad_right, y, fill=color, dash=(6, 4), width=1)
             canvas.create_text(width - pad_right + 8, y, text=f"{label} {price:.2f}", anchor=tk.W, fill=color, font=("Microsoft YaHei UI", 9, "bold"))
 
         trend = str(levels.get("trend") or "")
-        canvas.create_text(pad_left, 18, text=f"{name} {period} 走势｜{trend}", anchor=tk.W, fill=COLORS["text"], font=("Microsoft YaHei UI", 12, "bold"))
+        current = float(levels.get("current") or 0)
+        prev = float(rows[-2].get("close") or current) if len(rows) > 1 else current
+        change_color = COLORS["coral"] if current >= prev else COLORS["green"]
+        canvas.create_text(pad_left, 20, text=f"{name} {period} 走势｜{trend}", anchor=tk.W, fill=COLORS["sage_dark"], font=("Microsoft YaHei UI", 12, "bold"))
+        canvas.create_text(width - pad_right, 20, text=f"现价 {current:.2f}", anchor=tk.E, fill=change_color, font=("Microsoft YaHei UI", 12, "bold"))
         canvas.create_text(pad_left, height - 18, text=str(rows[0].get("label") or ""), anchor=tk.W, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
         canvas.create_text(width - pad_right, height - 18, text=str(rows[-1].get("label") or ""), anchor=tk.E, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
 
