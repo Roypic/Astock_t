@@ -43,6 +43,7 @@ PUSHPLUS_TOKEN_URL = "https://www.pushplus.plus/"
 NEWS_SEARCH_URL = "https://market.ft.tech/data/api/v1/market/data/semantic-search-news"
 GOOGLE_NEWS_RSS_URL = "https://news.google.com/rss/search"
 BING_SEARCH_URL = "https://cn.bing.com/search"
+EASTMONEY_SEARCH_URL = "https://searchapi.eastmoney.com/api/suggest/get"
 EASTMONEY_STOCK_INFO_URL = "https://push2.eastmoney.com/api/qt/stock/get"
 EASTMONEY_STOCK_SECTORS_URL = "https://push2.eastmoney.com/api/qt/slist/get"
 EASTMONEY_CONCEPT_BOARDS_URL = "https://push2.eastmoney.com/api/qt/clist/get"
@@ -204,6 +205,38 @@ GLOBAL_RESEARCH_PEERS = {
         ("Unimicron", "3037.TW", "封装基板/高阶 PCB"),
         ("Compeq", "2313.TW", "通信和消费电子 PCB"),
         ("Ibiden", "4062.T", "高端封装基板"),
+    ),
+}
+GLOBAL_THEME_PEERS = {
+    "CPO/光模块": (
+        ("Coherent", "COHR", "全球光通信器件/光模块产业链"),
+        ("Lumentum", "LITE", "光器件、激光器和数据中心光通信"),
+        ("Applied Optoelectronics", "AAOI", "数据中心光模块可比公司"),
+        ("Fabrinet", "FN", "光通信/电子制造服务，受益光模块景气"),
+    ),
+    "PCB/AI服务器": (
+        ("TTM Technologies", "TTMI", "高端 PCB、数据中心和航空航天板"),
+        ("Ibiden", "4062.T", "日本高端封装基板/服务器链条"),
+        ("Unimicron", "3037.TW", "台湾封装基板与高阶 PCB"),
+        ("Compeq", "2313.TW", "通信与消费电子 PCB"),
+    ),
+    "算力租赁/算力基础设施": (
+        ("Equinix", "EQIX", "全球数据中心基础设施龙头"),
+        ("Digital Realty", "DLR", "数据中心 REIT 和算力基础设施"),
+        ("Super Micro Computer", "SMCI", "AI服务器整机链条"),
+        ("Vertiv", "VRT", "数据中心电源和散热基础设施"),
+    ),
+    "光学/激光": (
+        ("Coherent", "COHR", "激光器、光学器件和材料平台"),
+        ("IPG Photonics", "IPGP", "工业激光器龙头"),
+        ("Hamamatsu Photonics", "6965.T", "光电子器件和探测器"),
+        ("Edmund Optics", "Private", "精密光学元件非上市对标"),
+    ),
+    "AI算力": (
+        ("NVIDIA", "NVDA", "AI算力硬件生态核心"),
+        ("Super Micro Computer", "SMCI", "AI服务器整机"),
+        ("Arista Networks", "ANET", "AI数据中心交换网络"),
+        ("Vertiv", "VRT", "数据中心供电和散热"),
     ),
 }
 TAM_FRAMEWORKS = {
@@ -1328,6 +1361,21 @@ class MonitorApp:
             return f"{upper}.XSHG" if upper.startswith("6") else f"{upper}.XSHE"
         return upper
 
+    def _to_market_symbol(self, code: str) -> str:
+        upper = str(code or "").upper()
+        if upper.endswith(".XSHG"):
+            return upper.replace(".XSHG", ".SH")
+        if upper.endswith(".XSHE"):
+            return upper.replace(".XSHE", ".SZ")
+        if upper.endswith(".SH") or upper.endswith(".SZ"):
+            return upper
+        if re.fullmatch(r"\d{6}", upper):
+            return f"{upper}.SH" if upper.startswith("6") else f"{upper}.SZ"
+        return upper
+
+    def _normalize_market_symbol(self, code: str) -> str:
+        return self._to_market_symbol(code)
+
     def _fetch_intraday_chart_rows(self, ft_code: str) -> list[dict[str, float | str]]:
         prices = MarketClient(ttl_seconds=20).get_stock_prices(ft_code)
         return [{"label": item.minute, "close": item.price, "high": item.price, "low": item.price, "volume": item.volume} for item in prices]
@@ -1543,9 +1591,11 @@ class MonitorApp:
         info = self._fetch_security_info(code) if code else {}
         name = str(info.get("symbol_name") or query)
         symbol = str(info.get("symbol") or code)
-        themes = self._research_themes_for(symbol, name, query)
+        ft_code = self._to_ft_stock_code(code) if code else ""
+        sector_info = self._fetch_eastmoney_sector_info(ft_code) if ft_code else {}
+        themes = self._research_themes_for(symbol, name, query, sector_info)
         industry_ranked = self._collect_research_items(name, themes, now)
-        peers = self._research_peers_for(code)
+        peers, peer_note, concepts = self._research_peers_for(code, name, themes, sector_info)
         peer_infos = [self._fetch_security_info(peer) for peer in peers]
         peer_infos = [item for item in peer_infos if item]
 
@@ -1558,15 +1608,17 @@ class MonitorApp:
         ]
         lines.extend(self._research_snapshot(info))
         lines.append("")
+        lines.extend(self._research_dynamic_pool_section(sector_info, concepts, peers, peer_note))
+        lines.append("")
         lines.extend(self._research_market_size_section(symbol, themes, industry_ranked))
         lines.append("")
         lines.extend(self._research_company_status_section(symbol, name, themes, industry_ranked))
         lines.append("")
         lines.extend(self._research_peer_section(info, peer_infos))
         lines.append("")
-        lines.extend(self._research_global_peer_section(symbol))
+        lines.extend(self._research_global_peer_section(symbol, concepts))
         lines.append("")
-        lines.extend(self._research_expectation_section(symbol, name, info, industry_ranked, peer_infos))
+        lines.extend(self._research_expectation_section(symbol, name, themes, info, industry_ranked, peer_infos))
         lines.append("")
         lines.extend(self._research_target_distribution_section(info, peer_infos, industry_ranked))
         lines.append("")
@@ -1636,7 +1688,41 @@ class MonitorApp:
             return text
         if re.fullmatch(r"\d{6}", text):
             return f"{text}.SH" if text.startswith("6") else f"{text}.SZ"
-        return STOCK_CODE_HINTS.get(query.strip(), "")
+        return STOCK_CODE_HINTS.get(query.strip(), "") or self._search_stock_code_by_name(query.strip())
+
+    def _search_stock_code_by_name(self, query: str) -> str:
+        if not query:
+            return ""
+        params = urllib.parse.urlencode(
+            {
+                "input": query,
+                "type": "14",
+                "token": "D41D8CD98F00B204E9800998ECF8427E",
+                "count": "10",
+            }
+        )
+        try:
+            req = urllib.request.Request(
+                f"{EASTMONEY_SEARCH_URL}?{params}",
+                headers={"User-Agent": "Mozilla/5.0 AShareTSignalMonitor/1.0", "Accept": "application/json"},
+            )
+            with safe_urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            rows = data.get("QuotationCodeTable", {}).get("Data", []) if isinstance(data, dict) else []
+            for row in rows if isinstance(rows, list) else []:
+                code = str(row.get("Code") or row.get("QuoteID") or "").strip()
+                name = str(row.get("Name") or "").strip()
+                market = str(row.get("MarketType") or row.get("MktNum") or "").strip()
+                if not re.fullmatch(r"\d{6}", code):
+                    continue
+                if query not in name and name not in query and query not in code:
+                    continue
+                if market == "1" or code.startswith("6"):
+                    return f"{code}.SH"
+                return f"{code}.SZ"
+        except Exception:
+            return ""
+        return ""
 
     def _fetch_security_info(self, symbol: str) -> dict[str, object]:
         if not symbol:
@@ -1647,19 +1733,97 @@ class MonitorApp:
             data = json.loads(resp.read().decode("utf-8"))
         return data if isinstance(data, dict) else {}
 
-    def _research_peers_for(self, code: str) -> tuple[str, ...]:
-        if code in RESEARCH_PEERS:
-            return RESEARCH_PEERS[code]
-        return tuple(symbol for symbol in ("600497.SH", "000060.SZ", "600206.SH") if symbol != code)
+    def _research_peers_for(
+        self,
+        code: str,
+        name: str,
+        themes: tuple[str, ...] | list[str],
+        sector_info: dict[str, object] | None = None,
+    ) -> tuple[tuple[str, ...], str, tuple[str, ...]]:
+        normalized_code = self._normalize_market_symbol(code)
+        if normalized_code in RESEARCH_PEERS:
+            return RESEARCH_PEERS[normalized_code], "内置高置信同行池", tuple()
 
-    def _research_themes_for(self, symbol: str, name: str, query: str) -> tuple[str, ...]:
+        profile = self._news_profile_for_query(name) or {"theme": tuple(themes), "aliases": (name,), "required": (name,)}
+        concepts = self._concepts_for_watch(name, profile, sector_info)
+        ft_code = self._to_ft_stock_code(normalized_code) if normalized_code else ""
+        peers = list(self._concept_peers(concepts, ft_code))
+
+        try:
+            model_by_code = {self._normalize_ft_code(model.code): model for model in load_models(self.models_dir)}
+            model = model_by_code.get(self._normalize_ft_code(ft_code))
+            if model:
+                peers = list(self._merge_securities(tuple(peers), model.basket, exclude_code=ft_code))
+        except Exception:
+            pass
+
+        peer_symbols = []
+        seen = set()
+        for peer in peers:
+            symbol = self._to_market_symbol(peer.code)
+            if not symbol or symbol == normalized_code or symbol in seen:
+                continue
+            seen.add(symbol)
+            peer_symbols.append(symbol)
+        if peer_symbols:
+            source = "东财行业/概念动态匹配"
+            if sector_info and sector_info.get("concepts"):
+                source += " + 远端概念"
+            return tuple(peer_symbols[:8]), source, concepts
+
+        fallback = self._theme_fallback_peers(tuple(themes), normalized_code)
+        if fallback:
+            return fallback, "主题关键词兜底池", concepts
+        return tuple(), "未匹配到同行池，仅展示目标公司", concepts
+
+    def _theme_fallback_peers(self, themes: tuple[str, ...], exclude_code: str = "") -> tuple[str, ...]:
+        text = " ".join(themes)
+        for concept, words in CONCEPT_KEYWORDS.items():
+            if any(word and word in text for word in words):
+                return tuple(
+                    self._to_market_symbol(code)
+                    for _name, code in CONCEPT_BASKETS.get(concept, ())
+                    if self._to_market_symbol(code) and self._to_market_symbol(code) != exclude_code
+                )[:8]
+        return tuple()
+
+    def _research_themes_for(
+        self,
+        symbol: str,
+        name: str,
+        query: str,
+        sector_info: dict[str, object] | None = None,
+    ) -> tuple[str, ...]:
         if symbol in RESEARCH_THEMES:
             return RESEARCH_THEMES[symbol]
         profile = self._news_profile_for_query(name) or self._news_profile_for_query(query)
-        if profile:
-            return tuple(profile.get("theme", ())) or tuple(self._query_terms(query))
-        terms = tuple(self._query_terms(query))
+        terms = list(profile.get("theme", ())) if profile else self._query_terms(query)
+        if sector_info:
+            industry = str(sector_info.get("industry") or "")
+            remote_concepts = [str(item) for item in sector_info.get("concepts", ()) if item]
+            terms.extend([industry, *remote_concepts])
+            terms.extend(self._map_remote_concepts(" ".join([industry, *remote_concepts])))
+        terms = [term for term in terms if term]
+        terms = list(dict.fromkeys(terms))
         return terms or (name,)
+
+    def _research_dynamic_pool_section(
+        self,
+        sector_info: dict[str, object],
+        concepts: tuple[str, ...],
+        peers: tuple[str, ...],
+        peer_note: str,
+    ) -> list[str]:
+        industry = str(sector_info.get("industry") or "接口未返回")
+        remote_concepts = [str(item) for item in sector_info.get("concepts", ()) if item]
+        return [
+            "二、动态研究池",
+            f"- 池子来源：{peer_note}。",
+            f"- 东财行业：{industry}。",
+            f"- 东财概念：{'、'.join(remote_concepts[:10]) or '接口未返回/未匹配'}。",
+            f"- 本地映射概念：{'、'.join(concepts) or '未匹配'}。",
+            f"- 同行代码池：{'、'.join(peers) or '未匹配到，估值分布会降级'}。",
+        ]
 
     def _research_snapshot(self, info: dict[str, object]) -> list[str]:
         if not info:
@@ -1675,9 +1839,9 @@ class MonitorApp:
         theme_text = "、".join(themes[:7])
         market_terms = self._top_keyword_hits(items, ("市场规模", "需求", "供给", "出口管制", "红外", "光纤", "光伏", "半导体", "军工", "卫星", "AI", "涨价"))
         lines = [
-            "二、市场规模与行业位置",
-            f"- 主题链条：{theme_text or '稀散金属/半导体材料'}。",
-            f"- 小 AI 摘要：近期信息主要围绕 {market_terms or '锗价、红外光学、光纤通信、光伏衬底及化合物半导体'} 展开。",
+            "三、市场规模与行业位置",
+            f"- 主题链条：{theme_text or '公司主营业务/所属行业'}。",
+            f"- 小 AI 摘要：近期信息主要围绕 {market_terms or theme_text or '行业景气、需求、供给、价格、订单和估值'} 展开。",
         ]
         framework = TAM_FRAMEWORKS.get(symbol)
         if framework:
@@ -1697,15 +1861,15 @@ class MonitorApp:
         else:
             main_line = "、".join(themes[:4]) or "主营业务景气和公司份额变化"
         return [
-            "三、公司现状",
+            "四、公司现状",
             f"- 主线：{name} 的研究主线来自 {main_line}。",
-            f"- 积极线索：{positive or '高端材料、光伏级/红外级产品、化合物半导体项目'}。",
+            f"- 积极线索：{positive or '订单/产能/客户结构改善、产品结构升级、行业景气修复'}。",
             f"- 风险线索：{risk or '盈利波动、产品价格周期、项目放量节奏、估值较高'}。",
             f"- 差异点：{name} 的关键不只是所在行业景气，而是能否在高价值产品/高端客户/产能兑现上形成可验证差异。",
         ]
 
     def _research_peer_section(self, info: dict[str, object], peers: list[dict[str, object]]) -> list[str]:
-        lines = ["四、同行差异与估值"]
+        lines = ["五、同行差异与估值"]
         rows = [info] + peers if info else peers
         lines.append("股票 | 定位 | 市值 | PE(TTM) | PB")
         for item in rows:
@@ -1720,12 +1884,20 @@ class MonitorApp:
         lines.append(f"- 估值解释：若 {target_name} PE/PB 显著高于同行，市场通常在定价更高成长性、稀缺性或资金情绪；但这也意味着业绩兑现要求更高。")
         return lines
 
-    def _research_global_peer_section(self, symbol: str) -> list[str]:
+    def _research_global_peer_section(self, symbol: str, concepts: tuple[str, ...] = tuple()) -> list[str]:
         peers = GLOBAL_RESEARCH_PEERS.get(symbol)
-        lines = ["五、全球同行与产业坐标"]
+        source = "内置股票对标池"
         if not peers:
-            lines.append("- 暂无内置全球同行池；建议补充海外龙头、上游材料商、下游客户链条后再做全球估值横比。")
+            for concept in concepts:
+                if concept in GLOBAL_THEME_PEERS:
+                    peers = GLOBAL_THEME_PEERS[concept]
+                    source = f"按概念动态匹配：{concept}"
+                    break
+        lines = ["六、全球同行与产业坐标"]
+        if not peers:
+            lines.append("- 暂无内置/动态全球同行池；建议补充海外龙头、上游材料商、下游客户链条后再做全球估值横比。")
             return lines
+        lines.append(f"- 池子来源：{source}。")
         lines.append("公司 | 代码 | 对标逻辑")
         for name, ticker, logic in peers:
             lines.append(f"{name} | {ticker} | {logic}")
@@ -1736,6 +1908,7 @@ class MonitorApp:
         self,
         symbol: str,
         name: str,
+        themes: tuple[str, ...] | list[str],
         info: dict[str, object],
         items: list[dict[str, object]],
         peers: list[dict[str, object]],
@@ -1751,14 +1924,19 @@ class MonitorApp:
             catalyst_words = ("AI服务器", "算力", "PCB", "电源", "高多层", "订单", "客户认证", "毛利率", "产能")
             fallback_catalysts = "AI服务器订单、高多层 PCB 认证、服务器电源相关业务放量、毛利率改善"
             key_observation = "1）AI服务器/算力链订单；2）高多层板和服务器电源客户认证；3）毛利率是否向高端产品靠拢；4）PCB全球同行估值是否同步抬升。"
-        else:
+        elif symbol == "002428.SZ":
             catalyst_words = ("出口管制", "涨价", "红外", "卫星", "光伏", "磷化铟", "砷化镓", "半导体", "项目", "产能")
             fallback_catalysts = "锗价上涨、高端产品放量、磷化铟/砷化镓项目兑现、红外/卫星/光伏需求"
             key_observation = "1）锗价和出口政策；2）红外级/光伏级/光纤级产品销量与毛利；3）化合物半导体产能利用率；4）同行估值是否同步抬升。"
+        else:
+            dynamic_terms = tuple(str(item) for item in themes[:8] if item)
+            catalyst_words = dynamic_terms + ("订单", "产能", "客户", "涨价", "毛利率", "项目", "放量", "政策", "出口", "景气")
+            fallback_catalysts = "行业需求改善、订单/产能兑现、产品结构升级、毛利率改善、同行估值同步抬升"
+            key_observation = f"1）{name} 所属主题是否持续有增量信息；2）收入/利润率是否兑现；3）同行估值是否同步；4）资金情绪是否从题材转向业绩验证。"
         catalysts = self._top_keyword_hits(items, catalyst_words)
         scenarios = self._research_scenarios(symbol, valuation_note)
         return [
-            "六、预期与跟踪框架",
+            "七、预期与跟踪框架",
             f"- 估值状态：{name} 当前 {valuation_note}；如果利润基数较低，PE 会被放大，需更多看 PB、市值/资源量、项目兑现。",
             f"- 上行催化：{catalysts or fallback_catalysts}。",
             f"- 关键观察：{key_observation}",
@@ -1778,7 +1956,7 @@ class MonitorApp:
         peers: list[dict[str, object]],
         items: list[dict[str, object]],
     ) -> list[str]:
-        lines = ["七、目标价分布与风险曲线"]
+        lines = ["八、目标价分布与风险曲线"]
         current = self._to_float(info.get("close")) if info else None
         if not current or current <= 0:
             return lines + ["- 缺少当前价格，无法生成目标价分布。"]
@@ -1909,7 +2087,7 @@ class MonitorApp:
             action = "可作为基本面观察池，但仍需结合流动性和行业周期。"
         risk_terms = self._top_keyword_hits(items, ("跌停", "减持", "质押", "问询", "处罚", "亏损", "下滑", "价格不确定", "竞争"))
         return [
-            "八、建议点与风险率",
+            "九、建议点与风险率",
             f"- 本地风险率：{risk_score}/100（{risk_level}）。该分数由估值溢价、PB、新闻风险词、短期异动共同估算。",
             f"- 操作建议点：{action}",
             f"- 重点风险：{risk_terms or '估值高、业绩兑现慢、行业景气波动、资金情绪退潮'}。",
@@ -1939,7 +2117,7 @@ class MonitorApp:
         return max(0, min(100, score))
 
     def _research_sources_section(self, items: list[dict[str, object]]) -> list[str]:
-        lines = ["九、信息源线索"]
+        lines = ["十、信息源线索"]
         for item in items[:8]:
             title = self._clean_text(str(item.get("title") or "无标题"), 80)
             source = item.get("source_site") or item.get("media_name") or item.get("_source") or "未知来源"
