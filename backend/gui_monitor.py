@@ -49,6 +49,7 @@ EASTMONEY_CONCEPT_BOARDS_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/latest"
 RELEASE_PAGE_URL = "https://github.com/Roypic/Astock_t/releases/latest"
 EXE_ASSET_NAME = "AShareTSignalMonitor.exe"
+DESKTOP_SHORTCUT_NAME = "A股做T信号监控.lnk"
 INFO_QUERIES = (
     "剑桥科技 CPO 光模块",
     "东山精密 PCB AI服务器 光模块",
@@ -395,6 +396,45 @@ def ensure_default_models() -> Path:
     return target
 
 
+def create_windows_desktop_shortcut(target_exe: Path | None = None) -> Path:
+    if os.name != "nt":
+        raise RuntimeError("桌面图标功能仅支持 Windows EXE")
+    target = target_exe or Path(sys.executable).resolve()
+    if not target.exists():
+        raise RuntimeError(f"没有找到可执行文件：{target}")
+    def ps_quote(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    script = "\n".join(
+        [
+            "$desktop = [Environment]::GetFolderPath('Desktop')",
+            "if (-not $desktop) { $desktop = [Environment]::GetFolderPath('CommonDesktopDirectory') }",
+            f"$shortcutPath = Join-Path $desktop {ps_quote(DESKTOP_SHORTCUT_NAME)}",
+            "$shell = New-Object -ComObject WScript.Shell",
+            "$shortcut = $shell.CreateShortcut($shortcutPath)",
+            f"$shortcut.TargetPath = {ps_quote(str(target))}",
+            f"$shortcut.WorkingDirectory = {ps_quote(str(target.parent))}",
+            f"$shortcut.IconLocation = {ps_quote(str(target) + ',0')}",
+            "$shortcut.Description = 'A股做T信号监控'",
+            "$shortcut.Save()",
+            "Write-Output $shortcutPath",
+        ]
+    )
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=12,
+        creationflags=flags,
+    )
+    if result.returncode != 0:
+        error = (result.stderr or result.stdout or "未知错误").strip()
+        raise RuntimeError(f"创建桌面图标失败：{error}")
+    shortcut_path = (result.stdout or "").strip().splitlines()[-1]
+    return Path(shortcut_path)
+
+
 def startup_log_path() -> Path:
     try:
         base = app_dir()
@@ -447,6 +487,7 @@ class MonitorApp:
         self._configure_style()
         self._build_ui()
         self._refresh_risk_summary(self.models_dir)
+        self.root.after(1200, self._ensure_desktop_shortcut_silent)
         self.root.after(300, self._drain_queue)
 
     def _configure_style(self) -> None:
@@ -590,6 +631,7 @@ class MonitorApp:
         ttk.Button(controls_top, text="自选走势", style="Ghost.TButton", command=self._open_watch_chart_window).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls_top, text="AI研报", style="Ghost.TButton", command=self._open_research_report_window).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls_top, text="更新程序", style="Ghost.TButton", command=self._check_update).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(controls_top, text="桌面图标", style="Ghost.TButton", command=self._create_desktop_shortcut).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(controls_top, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
         tk.Checkbutton(
             controls_bottom,
@@ -919,6 +961,24 @@ class MonitorApp:
 
     def _build_alert_notifier(self, token: str, weixin_mode: str = "") -> MultiNotifier:
         return MultiNotifier([PushPlusNotifier(token), WeixinPushNotifier(weixin_mode)])
+
+    def _ensure_desktop_shortcut_silent(self) -> None:
+        if os.name != "nt" or not getattr(sys, "frozen", False):
+            return
+        try:
+            shortcut = create_windows_desktop_shortcut()
+            self._log(f"桌面图标已就绪：{shortcut}")
+        except Exception as exc:
+            self._log(f"桌面图标创建失败，可点击「桌面图标」重试：{exc}")
+
+    def _create_desktop_shortcut(self) -> None:
+        try:
+            shortcut = create_windows_desktop_shortcut()
+            self._log(f"桌面图标已创建：{shortcut}")
+            messagebox.showinfo("桌面图标", f"已创建桌面图标：\n{shortcut}")
+        except Exception as exc:
+            self._log(f"桌面图标创建失败：{exc}")
+            messagebox.showerror("桌面图标创建失败", str(exc))
 
     def _show_premarket_analysis(self) -> None:
         model_path = Path(self.model_path_var.get().strip())
@@ -2012,6 +2072,10 @@ class MonitorApp:
         flags = 0
         if os.name == "nt":
             flags = getattr(subprocess, "DETACHED_PROCESS", 0)
+            try:
+                create_windows_desktop_shortcut(update_file)
+            except Exception as exc:
+                self.queue.put(("log", f"新版桌面图标更新失败：{exc}"))
         subprocess.Popen([str(update_file)], cwd=str(update_file.parent), creationflags=flags)
         self.root.after(300, self.root.destroy)
 
