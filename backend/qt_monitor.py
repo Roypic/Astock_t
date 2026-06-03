@@ -15,8 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QPointF, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -146,6 +146,149 @@ class GlassCard(QFrame):
             row.addWidget(accent)
             row.addLayout(copy, 1)
             self.layout.addLayout(row)
+
+
+class PriceChartWidget(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.payload: dict[str, object] | None = None
+        self.error = ""
+        self.setMinimumHeight(360)
+        self.setObjectName("priceChart")
+
+    def set_payload(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+        self.error = ""
+        self.update()
+
+    def set_error(self, message: str) -> None:
+        self.payload = None
+        self.error = message
+        self.update()
+
+    def paintEvent(self, _event: Any) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = self.rect()
+        painter.fillRect(rect, QColor("#07192D"))
+        painter.setPen(QPen(QColor("#1B4B7D"), 1))
+        painter.drawRoundedRect(rect.adjusted(1, 1, -2, -2), 18, 18)
+        painter.setPen(QPen(QColor("#2E75B8"), 1))
+        painter.drawLine(18, 16, rect.width() - 18, 16)
+
+        if self.error:
+            painter.setPen(QColor("#DDEEFF"))
+            painter.drawText(rect, Qt.AlignCenter, self.error)
+            return
+        if not self.payload:
+            painter.setPen(QColor("#92A9C4"))
+            painter.drawText(rect, Qt.AlignCenter, "点击查看走势后显示图表")
+            return
+
+        rows = self.payload.get("rows")
+        levels = self.payload.get("levels")
+        if not isinstance(rows, list) or not isinstance(levels, dict) or len(rows) < 2:
+            painter.setPen(QColor("#92A9C4"))
+            painter.drawText(rect, Qt.AlignCenter, "走势数据不足")
+            return
+
+        width = max(320, rect.width())
+        height = max(260, rect.height())
+        pad_left, pad_right, pad_top, pad_bottom = 64, 98, 46, 46
+        lows = [float(row.get("low") or row["close"]) for row in rows if isinstance(row, dict)]
+        highs = [float(row.get("high") or row["close"]) for row in rows if isinstance(row, dict)]
+        if not lows or not highs:
+            return
+        supports = [float(value) for value in levels.get("supports", []) if isinstance(value, (int, float))]
+        resistances = [float(value) for value in levels.get("resistances", []) if isinstance(value, (int, float))]
+        chip_peak = float(levels.get("chip_peak") or lows[-1])
+        level_prices = supports + resistances + [chip_peak]
+        min_price = min([min(lows), *level_prices])
+        max_price = max([max(highs), *level_prices])
+        spread = max_price - min_price or 1.0
+        min_price -= spread * 0.08
+        max_price += spread * 0.08
+
+        def x_at(index: int) -> float:
+            return pad_left + index * (width - pad_left - pad_right) / max(1, len(rows) - 1)
+
+        def y_at(price: float) -> float:
+            return pad_top + (max_price - price) * (height - pad_top - pad_bottom) / (max_price - min_price)
+
+        painter.setFont(QFont("Microsoft YaHei UI", 8))
+        for i in range(5):
+            y = pad_top + i * (height - pad_top - pad_bottom) / 4
+            price = max_price - i * (max_price - min_price) / 4
+            painter.setPen(QPen(QColor("#173755"), 1))
+            painter.drawLine(pad_left, int(y), width - pad_right, int(y))
+            painter.setPen(QColor("#92A9C4"))
+            painter.drawText(12, int(y + 4), f"{price:.2f}")
+        for i in range(5):
+            x = pad_left + i * (width - pad_left - pad_right) / 4
+            painter.setPen(QPen(QColor("#102842"), 1))
+            painter.drawLine(int(x), pad_top, int(x), height - pad_bottom)
+
+        period = str(self.payload.get("period") or "")
+        if period != "分时":
+            painter.setPen(QPen(QColor("#607D9C"), 1))
+            for index, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    continue
+                x = x_at(index)
+                painter.drawLine(QPointF(x, y_at(float(row.get("low") or row["close"]))), QPointF(x, y_at(float(row.get("high") or row["close"]))))
+
+        path = QPainterPath()
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            point = QPointF(x_at(index), y_at(float(row["close"])))
+            if index == 0:
+                path.moveTo(point)
+            else:
+                path.lineTo(point)
+        painter.setPen(QPen(QColor("#164D86"), 7))
+        painter.drawPath(path)
+        painter.setPen(QPen(QColor("#6DB7FF"), 3))
+        painter.drawPath(path)
+        painter.setPen(QPen(QColor("#D8ECFF"), 1))
+        painter.drawPath(path)
+
+        dash = QPen(QColor("#D71920"), 1)
+        dash.setStyle(Qt.DashLine)
+        green_dash = QPen(QColor("#24C07A"), 1)
+        green_dash.setStyle(Qt.DashLine)
+        chip_dash = QPen(QColor("#FF8C6B"), 1)
+        chip_dash.setStyle(Qt.DashLine)
+        line_specs: list[tuple[str, float, QPen, QColor]] = []
+        for index, price in enumerate(resistances[:3], start=1):
+            line_specs.append((f"压{index}", price, dash, QColor("#FF6B72")))
+        line_specs.append(("筹码峰", chip_peak, chip_dash, QColor("#FFB199")))
+        for index, price in enumerate(supports[:3], start=1):
+            line_specs.append((f"支{index}", price, green_dash, QColor("#48D597")))
+        painter.setFont(QFont("Microsoft YaHei UI", 9, QFont.Bold))
+        for label, price, pen, color in line_specs:
+            y = y_at(price)
+            painter.setPen(pen)
+            painter.drawLine(pad_left, int(y), width - pad_right, int(y))
+            painter.setPen(color)
+            painter.drawText(width - pad_right + 8, int(y + 4), f"{label} {price:.2f}")
+
+        name = str(self.payload.get("name") or "")
+        trend = str(levels.get("trend") or "")
+        current = float(levels.get("current") or 0)
+        prev = float(rows[-2].get("close") or current) if len(rows) > 1 and isinstance(rows[-2], dict) else current
+        current_color = QColor("#FF6B72") if current >= prev else QColor("#48D597")
+        painter.setFont(QFont("Microsoft YaHei UI", 12, QFont.Bold))
+        painter.setPen(QColor("#EAF3FF"))
+        painter.drawText(pad_left, 28, f"{name} {period} 走势｜{trend}")
+        painter.setPen(current_color)
+        painter.drawText(width - pad_right - 120, 28, f"现价 {current:.2f}")
+        painter.setFont(QFont("Microsoft YaHei UI", 8))
+        painter.setPen(QColor("#92A9C4"))
+        first_label = str(rows[0].get("label") or "") if isinstance(rows[0], dict) else ""
+        last_label = str(rows[-1].get("label") or "") if isinstance(rows[-1], dict) else ""
+        painter.drawText(pad_left, height - 18, first_label)
+        painter.drawText(width - pad_right - 80, height - 18, last_label)
 
 
 class MonitorWindow(QMainWindow):
@@ -791,9 +934,12 @@ class MonitorWindow(QMainWindow):
         bar.addWidget(period)
         bar.addWidget(run)
         layout.addLayout(bar)
+        chart = PriceChartWidget()
+        layout.addWidget(chart)
         text = QTextEdit()
         text.setReadOnly(True)
-        text.setPlainText("输入股票后点击查看走势。v2 当前展示支撑/压力/筹码/盘口摘要，图形渲染会继续对齐 v1。")
+        text.setMaximumHeight(190)
+        text.setPlainText("输入股票后点击查看走势。")
         layout.addWidget(text)
 
         def execute() -> None:
@@ -802,14 +948,15 @@ class MonitorWindow(QMainWindow):
                 QMessageBox.warning(dialog, "缺少股票", "请输入股票名称或代码。")
                 return
             text.setPlainText("正在获取走势数据...")
+            chart.set_error("正在获取走势数据...")
 
             def worker() -> None:
                 try:
                     payload = self._build_chart_payload(q, period.currentText())
                     content = self._chart_summary_text(payload)
-                    self.queue.put(("set_text", (text, content)))
+                    self.queue.put(("chart_payload", (chart, text, payload, content)))
                 except Exception as exc:
-                    self.queue.put(("set_text", (text, f"走势获取失败：{exc}")))
+                    self.queue.put(("chart_error", (chart, text, f"走势获取失败：{exc}")))
 
             threading.Thread(target=worker, daemon=True).start()
 
@@ -927,6 +1074,20 @@ class MonitorWindow(QMainWindow):
                     widget, content = payload
                     if hasattr(widget, "setPlainText"):
                         widget.setPlainText(str(content))
+            elif kind == "chart_payload":
+                if isinstance(payload, tuple) and len(payload) == 4:
+                    chart, text, chart_payload, content = payload
+                    if hasattr(chart, "set_payload") and isinstance(chart_payload, dict):
+                        chart.set_payload(chart_payload)
+                    if hasattr(text, "setPlainText"):
+                        text.setPlainText(str(content))
+            elif kind == "chart_error":
+                if isinstance(payload, tuple) and len(payload) == 3:
+                    chart, text, message = payload
+                    if hasattr(chart, "set_error"):
+                        chart.set_error(str(message))
+                    if hasattr(text, "setPlainText"):
+                        text.setPlainText(str(message))
             elif kind == "error":
                 self.status_value.setText("错误")
                 self._log(str(payload))
