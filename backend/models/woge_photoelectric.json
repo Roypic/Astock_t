@@ -1,0 +1,60 @@
+{
+  "name": "沃格光电",
+  "code": "603773.XSHG",
+  "basket": [
+    {
+      "name": "凯盛科技",
+      "code": "600552.XSHG"
+    },
+    {
+      "name": "蓝思科技",
+      "code": "300433.SZ"
+    },
+    {
+      "name": "莱宝高科",
+      "code": "002106.SZ"
+    },
+    {
+      "name": "三利谱",
+      "code": "002876.SZ"
+    },
+    {
+      "name": "彩虹股份",
+      "code": "600707.XSHG"
+    },
+    {
+      "name": "东材科技",
+      "code": "601208.XSHG"
+    }
+  ],
+  "params": {
+    "basket_threshold": 0.0,
+    "market_threshold": 0.0,
+    "relative_threshold": 0.0,
+    "avg_threshold": 0.0,
+    "take_profit": 0.016,
+    "stop_loss": 0.012,
+    "max_basket_dispersion": 0.055,
+    "volume_ratio_threshold": 0.0,
+    "max_daily_signals": 5,
+    "trade_sides": "both",
+    "strategy_mode": "intraday_aggressive",
+    "min_signal_score": 1.2,
+    "min_signal_gap_minutes": 10
+  },
+  "backtest": {
+    "window": "近30个交易日分钟回测",
+    "mode": "激进日内做T：只评估信号后当日最大可捕捉价差，不评估底仓隔夜走势；正T/倒T均可，一天多点位",
+    "trade_count": 128,
+    "win_rate_pct": 92.19,
+    "avg_result_pct": 1.31,
+    "sum_result_pct": 168.23,
+    "max_drawdown_pct": 0.0,
+    "bad_tail_rate_pct": 0.0,
+    "target_rate_pct": 70.31,
+    "zero_rate_pct": 7.81,
+    "buy_count": 92,
+    "sell_count": 36,
+    "warning": "激进回测只衡量日内做T价差机会，不代表实际成交、滑点、挂单成功率或底仓盈亏；请小心使用。"
+  }
+}

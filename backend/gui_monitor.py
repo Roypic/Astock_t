@@ -158,6 +158,7 @@ STOCK_CODE_HINTS = {
     "江西铜业": "600362.SH",
     "锡业股份": "000960.SZ",
     "贵研铂业": "600459.SH",
+    "沃格光电": "603773.SH",
     "剑桥科技": "603083.SH",
     "东山精密": "002384.SZ",
     "福晶科技": "002222.SZ",
@@ -173,6 +174,7 @@ RESEARCH_THEMES = {
     "002384.SZ": ("PCB", "FPC", "AI服务器", "新能源车", "消费电子", "光模块"),
     "603083.SH": ("CPO", "光模块", "光通信", "数据中心", "AI算力"),
     "002222.SZ": ("激光晶体", "非线性晶体", "光通信", "光学元件", "半导体设备"),
+    "603773.SH": ("玻璃基板", "TGV", "Mini LED", "显示面板", "先进封装", "光电显示", "电子玻璃"),
 }
 GLOBAL_RESEARCH_PEERS = {
     "002428.SZ": (
@@ -436,7 +438,7 @@ class MonitorApp:
         self.weixin_mode_var = tk.StringVar(value="weixin")
         self.model_path_var = tk.StringVar(value=str(self.models_dir))
         self.interval_var = tk.StringVar(value=str(DEFAULT_INTERVAL_SECONDS))
-        self.news_watchlist_var = tk.StringVar(value="剑桥科技，东山精密，福晶科技，利通电子，锡业股份")
+        self.news_watchlist_var = tk.StringVar(value="剑桥科技，东山精密，福晶科技，利通电子，锡业股份，沃格光电")
         self.info_alert_var = tk.BooleanVar(value=True)
         self.market_alert_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="未启动")
