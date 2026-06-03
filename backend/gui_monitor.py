@@ -23,6 +23,7 @@ import tkinter as tk
 from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from typing import Callable
 
 from model_engine import BEIJING_TZ, INDEX_CODES, TRADING_SESSIONS, MarketClient, ModelSignalEngine, Security, TModel, load_models
 from notifier import MultiNotifier, PushPlusNotifier, WeixinPushNotifier
@@ -463,7 +464,12 @@ COLORS = {
     "red_soft": "#FFF0F0",
     "header": "#0B3A75",
     "header_soft": "#DCEBFF",
+    "header_deep": "#061A33",
+    "surface": "#ECF3FC",
+    "shadow": "#C8D5E6",
+    "gold": "#F5B342",
     "terminal": "#081C33",
+    "terminal_grid": "#16324F",
 }
 
 
@@ -608,6 +614,54 @@ class MonitorApp:
         style.configure("Treeview.Heading", background=COLORS["header"], foreground="#FFFFFF", relief="flat", padding=(8, 7), font=("Microsoft YaHei UI", 9, "bold"))
         style.map("Treeview", background=[("selected", COLORS["sage"])], foreground=[("selected", "#FFFFFF")])
 
+    def _flat_button(self, parent: tk.Widget, text: str, command: Callable[[], None], kind: str = "ghost") -> tk.Button:
+        palette = {
+            "primary": (COLORS["sage"], "#FFFFFF", COLORS["sage_dark"]),
+            "warm": (COLORS["coral"], "#FFFFFF", COLORS["coral_dark"]),
+            "ghost": ("#FFFFFF", COLORS["sage_dark"], COLORS["mint"]),
+            "dark": (COLORS["header_deep"], "#FFFFFF", COLORS["header"]),
+        }
+        bg, fg, active = palette.get(kind, palette["ghost"])
+        return tk.Button(
+            parent,
+            text=text,
+            command=command,
+            bg=bg,
+            fg=fg,
+            activebackground=active,
+            activeforeground=fg,
+            relief=tk.FLAT,
+            bd=0,
+            padx=14,
+            pady=8,
+            cursor="hand2",
+            font=("Microsoft YaHei UI", 9, "bold" if kind in {"primary", "warm"} else "normal"),
+            highlightthickness=1,
+            highlightbackground=COLORS["line"],
+        )
+
+    def _chip(self, parent: tk.Widget, text: str, bg: str, fg: str) -> tk.Label:
+        return tk.Label(
+            parent,
+            text=text,
+            bg=bg,
+            fg=fg,
+            padx=10,
+            pady=4,
+            font=("Microsoft YaHei UI", 8, "bold"),
+        )
+
+    def _card_title(self, parent: tk.Widget, text: str, subtitle: str = "") -> tk.Frame:
+        bar = tk.Frame(parent, bg=COLORS["card"])
+        accent = tk.Frame(bar, bg=COLORS["sage"], width=4, height=24)
+        accent.pack(side=tk.LEFT, padx=(0, 8), pady=(0, 8))
+        copy = tk.Frame(bar, bg=COLORS["card"])
+        copy.pack(side=tk.LEFT, fill=tk.X, expand=True, pady=(0, 8))
+        tk.Label(copy, text=text, bg=COLORS["card"], fg=COLORS["sage_dark"], font=("Microsoft YaHei UI", 11, "bold")).pack(anchor=tk.W)
+        if subtitle:
+            tk.Label(copy, text=subtitle, bg=COLORS["card"], fg=COLORS["muted"], font=("Microsoft YaHei UI", 8)).pack(anchor=tk.W)
+        return bar
+
     def _build_ui(self) -> None:
         shell = ttk.Frame(self.root)
         shell.pack(fill=tk.BOTH, expand=True)
@@ -622,26 +676,31 @@ class MonitorApp:
         outer.bind("<Configure>", self._update_main_scrollregion)
         self.main_canvas.bind("<Configure>", self._resize_main_window)
 
-        header = tk.Frame(outer, bg=COLORS["header"], highlightthickness=1, highlightbackground=COLORS["sage_dark"])
+        header = tk.Frame(outer, bg=COLORS["header_deep"], highlightthickness=1, highlightbackground=COLORS["sage_dark"])
         header.pack(fill=tk.X, pady=(0, 14))
         header.columnconfigure(0, weight=1)
-        title_block = tk.Frame(header, bg=COLORS["header"])
+        title_block = tk.Frame(header, bg=COLORS["header_deep"])
         title_block.grid(row=0, column=0, sticky=tk.W, padx=18, pady=14)
         tk.Label(
             title_block,
             text="A股做T行情终端",
-            bg=COLORS["header"],
+            bg=COLORS["header_deep"],
             fg="#FFFFFF",
             font=("Microsoft YaHei UI", 21, "bold"),
         ).pack(anchor=tk.W)
         tk.Label(
             title_block,
             text="自选行情｜盘中做T信号｜信息面雷达｜微信推送",
-            bg=COLORS["header"],
+            bg=COLORS["header_deep"],
             fg=COLORS["header_soft"],
             font=("Microsoft YaHei UI", 9),
         ).pack(anchor=tk.W, pady=(4, 0))
-        self.mascot = tk.Canvas(header, width=150, height=78, bg=COLORS["header"], highlightthickness=0, cursor="hand2")
+        chip_row = tk.Frame(title_block, bg=COLORS["header_deep"])
+        chip_row.pack(anchor=tk.W, pady=(10, 0))
+        self._chip(chip_row, "CN A-SHARE", COLORS["sage"], "#FFFFFF").pack(side=tk.LEFT, padx=(0, 8))
+        self._chip(chip_row, "T SIGNAL", COLORS["coral"], "#FFFFFF").pack(side=tk.LEFT, padx=(0, 8))
+        self._chip(chip_row, "LIVE PUSH", COLORS["gold"], COLORS["header_deep"]).pack(side=tk.LEFT)
+        self.mascot = tk.Canvas(header, width=150, height=78, bg=COLORS["header_deep"], highlightthickness=0, cursor="hand2")
         self.mascot.grid(row=0, column=1, sticky=tk.E, padx=(0, 12), pady=8)
         self.mascot.bind("<Button-1>", self._mascot_jump_away)
         self._animate_mascot()
@@ -650,7 +709,8 @@ class MonitorApp:
         form.pack(fill=tk.X, pady=(0, 12))
         form.columnconfigure(1, weight=1)
 
-        ttk.Label(form, text="配置", style="CardTitle.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 12), pady=(0, 10))
+        title_bar = self._card_title(form, "监控配置", "模型、推送、自选池和扫描节奏")
+        title_bar.grid(row=0, column=0, columnspan=3, sticky=tk.EW, padx=(0, 12), pady=(0, 8))
         self.status_badge = tk.Label(
             form,
             textvariable=self.status_var,
@@ -664,8 +724,8 @@ class MonitorApp:
 
         ttk.Label(form, text="模型文件/文件夹", style="Muted.TLabel").grid(row=1, column=0, sticky=tk.W, padx=(0, 12), pady=7)
         ttk.Entry(form, textvariable=self.model_path_var).grid(row=1, column=1, sticky=tk.EW, padx=(0, 8), pady=7)
-        ttk.Button(form, text="选择文件", style="Ghost.TButton", command=self._choose_file).grid(row=1, column=2, padx=4, pady=7)
-        ttk.Button(form, text="选择文件夹", style="Ghost.TButton", command=self._choose_dir).grid(row=1, column=3, padx=(4, 0), pady=7)
+        self._flat_button(form, "选择文件", self._choose_file).grid(row=1, column=2, padx=4, pady=7)
+        self._flat_button(form, "选择文件夹", self._choose_dir).grid(row=1, column=3, padx=(4, 0), pady=7)
 
         ttk.Label(form, text="PushPlus token", style="Muted.TLabel").grid(row=2, column=0, sticky=tk.W, padx=(0, 12), pady=7)
         ttk.Entry(form, textvariable=self.token_var, show="*").grid(row=2, column=1, sticky=tk.EW, padx=(0, 8), pady=7)
@@ -712,7 +772,7 @@ class MonitorApp:
             wraplength=780,
             font=("Microsoft YaHei UI", 9),
         ).grid(row=0, column=0, sticky=tk.EW)
-        ttk.Button(help_frame, text="打开 PushPlus", style="Ghost.TButton", command=self._open_pushplus).grid(row=0, column=1, padx=(12, 0))
+        self._flat_button(help_frame, "打开 PushPlus", self._open_pushplus).grid(row=0, column=1, padx=(12, 0))
         weixin_frame = ttk.Frame(help_frame, style="Soft.TFrame")
         weixin_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(10, 0))
         tk.Label(
@@ -724,8 +784,8 @@ class MonitorApp:
             anchor=tk.W,
             font=("Microsoft YaHei UI", 9),
         ).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(weixin_frame, text="微信登录", style="Ghost.TButton", command=self._start_weixin_login).pack(side=tk.LEFT, padx=(8, 0))
-        ttk.Button(weixin_frame, text="刷新会话", style="Ghost.TButton", command=self._start_weixin_session).pack(side=tk.LEFT, padx=(8, 0))
+        self._flat_button(weixin_frame, "微信登录", self._start_weixin_login).pack(side=tk.LEFT, padx=(8, 0))
+        self._flat_button(weixin_frame, "刷新会话", self._start_weixin_session).pack(side=tk.LEFT, padx=(8, 0))
 
         controls = ttk.Frame(outer)
         controls.pack(fill=tk.X, pady=(0, 12))
@@ -733,15 +793,15 @@ class MonitorApp:
         controls_top.pack(fill=tk.X, pady=(0, 8))
         controls_bottom = ttk.Frame(controls)
         controls_bottom.pack(fill=tk.X)
-        ttk.Button(controls_top, text="模型盘前", style="Ghost.TButton", command=self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls_top, text="信息面盘前", style="Ghost.TButton", command=self._show_info_premarket).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls_top, text="自选信息面", style="Ghost.TButton", command=self._open_custom_info_window).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls_top, text="小作文雷达", style="Ghost.TButton", command=self._open_rumor_radar_window).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls_top, text="自选走势", style="Ghost.TButton", command=self._open_watch_chart_window).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls_top, text="AI研报", style="Ghost.TButton", command=self._open_research_report_window).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls_top, text="更新程序", style="Ghost.TButton", command=self._check_update).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls_top, text="桌面图标", style="Ghost.TButton", command=self._create_desktop_shortcut).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls_top, text="测试推送", style="Ghost.TButton", command=self._test_push).pack(side=tk.LEFT)
+        self._flat_button(controls_top, "模型盘前", self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "信息面盘前", self._show_info_premarket).pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "自选信息面", self._open_custom_info_window).pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "小作文雷达", self._open_rumor_radar_window).pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "自选走势", self._open_watch_chart_window, "dark").pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "AI研报", self._open_research_report_window).pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "更新程序", self._check_update).pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "桌面图标", self._create_desktop_shortcut).pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "测试推送", self._test_push).pack(side=tk.LEFT)
         tk.Checkbutton(
             controls_bottom,
             text="盘中信息异动",
@@ -764,13 +824,13 @@ class MonitorApp:
             selectcolor=COLORS["card"],
             font=("Microsoft YaHei UI", 9),
         ).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Button(controls_bottom, text="开始监控", style="Primary.TButton", command=self._start).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(controls_bottom, text="停止", style="Warm.TButton", command=self._stop).pack(side=tk.LEFT)
+        self._flat_button(controls_bottom, "开始监控", self._start, "primary").pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_bottom, "停止", self._stop, "warm").pack(side=tk.LEFT)
 
         columns = ("symbol", "code", "status", "action", "price", "target", "stop", "minute", "score", "message")
         table_card = ttk.Frame(outer, style="Card.TFrame", padding=12)
         table_card.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
-        ttk.Label(table_card, text="监控列表", style="CardTitle.TLabel").pack(anchor=tk.W, pady=(0, 8))
+        self._card_title(table_card, "监控列表", "实时信号、目标价、止损价和触发解释").pack(fill=tk.X)
         table_body = ttk.Frame(table_card, style="Card.TFrame")
         table_body.pack(fill=tk.BOTH, expand=True)
         self.table = ttk.Treeview(table_body, columns=columns, show="headings", height=8)
@@ -816,7 +876,7 @@ class MonitorApp:
 
         log_frame = ttk.Frame(outer, style="Card.TFrame", padding=12)
         log_frame.pack(fill=tk.BOTH, expand=True)
-        ttk.Label(log_frame, text="运行日志 / 信号", style="CardTitle.TLabel").pack(anchor=tk.W, pady=(0, 8))
+        self._card_title(log_frame, "运行日志 / 信号", "后台状态、推送结果和异常信息").pack(fill=tk.X)
         log_body = ttk.Frame(log_frame, style="Card.TFrame")
         log_body.pack(fill=tk.BOTH, expand=True)
         self.log = tk.Text(
@@ -896,15 +956,15 @@ class MonitorApp:
         c = self.mascot
         c.delete("mascot")
         body = "#9DB7A7"
-        body_dark = "#779887"
-        belly = "#F8E9D0"
-        ink = "#2F3834"
-        blush = "#E8A39A"
-        c.create_oval(x - 34, 79, x + 34, 88, fill="#E8DDCF", outline="", tags="mascot")
+        body_dark = "#6E9A8A"
+        belly = "#EAF3FF"
+        ink = "#102033"
+        blush = "#F5B2AE"
+        c.create_oval(x - 34, 79, x + 34, 88, fill="#0A2444", outline="", tags="mascot")
         c.create_oval(x - 35, y - 42, x + 35, y + 20, fill=body, outline=body_dark, width=2, tags="mascot")
         c.create_oval(x - 48, y - 55, x - 18, y - 22, fill=body, outline=body_dark, width=2, tags="mascot")
         c.create_oval(x + 18, y - 55, x + 48, y - 22, fill=body, outline=body_dark, width=2, tags="mascot")
-        c.create_oval(x - 26, y - 12, x + 26, y + 22, fill=belly, outline="#E7D3B6", width=1, tags="mascot")
+        c.create_oval(x - 26, y - 12, x + 26, y + 22, fill=belly, outline="#BFD5EE", width=1, tags="mascot")
         c.create_oval(x - 16, y - 24, x - 9, y - 17, fill=ink, outline="", tags="mascot")
         c.create_oval(x + 9, y - 24, x + 16, y - 17, fill=ink, outline="", tags="mascot")
         c.create_oval(x - 14, y - 22, x - 12, y - 20, fill="#FFFFFF", outline="", tags="mascot")
@@ -1360,19 +1420,19 @@ class MonitorApp:
         window.geometry("1040x720")
         window.configure(bg=COLORS["bg"])
 
-        header = tk.Frame(window, bg=COLORS["header"], highlightthickness=1, highlightbackground=COLORS["sage_dark"])
+        header = tk.Frame(window, bg=COLORS["header_deep"], highlightthickness=1, highlightbackground=COLORS["sage_dark"])
         header.pack(fill=tk.X, padx=12, pady=(12, 8))
         tk.Label(
             header,
             text="自选行情走势",
-            bg=COLORS["header"],
+            bg=COLORS["header_deep"],
             fg="#FFFFFF",
             font=("Microsoft YaHei UI", 14, "bold"),
         ).pack(side=tk.LEFT, padx=12, pady=10)
         tk.Label(
             header,
             text="分时 / K线 / 支撑压力 / 筹码密集区 / 五档盘口",
-            bg=COLORS["header"],
+            bg=COLORS["header_deep"],
             fg=COLORS["header_soft"],
             font=("Microsoft YaHei UI", 9),
         ).pack(side=tk.LEFT, padx=(2, 0), pady=10)
@@ -1391,13 +1451,13 @@ class MonitorApp:
         period_box = ttk.Combobox(panel, textvariable=period_var, values=("分时", "日线", "周线", "月线"), width=8, state="readonly")
         period_box.grid(row=0, column=2, sticky=tk.W, padx=(0, 10))
 
-        canvas = tk.Canvas(window, bg=COLORS["card"], highlightthickness=1, highlightbackground=COLORS["line"])
+        canvas = tk.Canvas(window, bg=COLORS["terminal"], highlightthickness=1, highlightbackground=COLORS["sage_dark"])
         canvas.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
         summary = tk.Text(
             window,
             height=10,
             wrap=tk.WORD,
-            bg=COLORS["card"],
+            bg="#FFFFFF",
             fg=COLORS["text"],
             relief=tk.FLAT,
             padx=12,
@@ -1429,7 +1489,7 @@ class MonitorApp:
 
             threading.Thread(target=worker, daemon=True).start()
 
-        ttk.Button(panel, text="查看走势", style="Primary.TButton", command=run_chart).grid(row=0, column=3, sticky=tk.E)
+        self._flat_button(panel, "查看走势", run_chart, "primary").grid(row=0, column=3, sticky=tk.E)
         entry.bind("<Return>", lambda _event: run_chart())
         period_box.bind("<<ComboboxSelected>>", lambda _event: run_chart())
         entry.focus_set()
@@ -1667,7 +1727,7 @@ class MonitorApp:
         width = max(760, canvas.winfo_width())
         height = max(380, canvas.winfo_height())
         canvas.delete("all")
-        canvas.create_rectangle(0, 0, width, height, fill="#FFFFFF", outline=COLORS["line"])
+        canvas.create_rectangle(0, 0, width, height, fill=COLORS["terminal"], outline=COLORS["sage_dark"])
         pad_left, pad_right, pad_top, pad_bottom = 62, 96, 42, 44
         lows = [float(row.get("low") or row["close"]) for row in rows]
         highs = [float(row.get("high") or row["close"]) for row in rows]
@@ -1691,20 +1751,21 @@ class MonitorApp:
         for i in range(5):
             y = pad_top + i * (height - pad_top - pad_bottom) / 4
             price = max_price - i * (max_price - min_price) / 4
-            canvas.create_line(pad_left, y, width - pad_right, y, fill=COLORS["line"])
-            canvas.create_text(12, y, text=f"{price:.2f}", anchor=tk.W, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
+            canvas.create_line(pad_left, y, width - pad_right, y, fill=COLORS["terminal_grid"])
+            canvas.create_text(12, y, text=f"{price:.2f}", anchor=tk.W, fill="#92A9C4", font=("Microsoft YaHei UI", 8))
         for i in range(5):
             x = pad_left + i * (width - pad_left - pad_right) / 4
-            canvas.create_line(x, pad_top, x, height - pad_bottom, fill="#EEF3FA")
+            canvas.create_line(x, pad_top, x, height - pad_bottom, fill="#102842")
 
         points = []
         for index, row in enumerate(rows):
             points.extend([x_at(index), y_at(float(row["close"]))])
             if period != "分时":
                 x = x_at(index)
-                canvas.create_line(x, y_at(float(row.get("low") or row["close"])), x, y_at(float(row.get("high") or row["close"])), fill="#90A4BE")
+                canvas.create_line(x, y_at(float(row.get("low") or row["close"])), x, y_at(float(row.get("high") or row["close"])), fill="#607D9C")
         if len(points) >= 4:
-            canvas.create_line(*points, fill=COLORS["sage_dark"], width=2, smooth=True)
+            canvas.create_line(*points, fill="#6DB7FF", width=3, smooth=True)
+            canvas.create_line(*points, fill="#D8ECFF", width=1, smooth=True)
 
         line_specs = []
         for index, price in enumerate(resistances[:3], start=1):
@@ -1721,10 +1782,10 @@ class MonitorApp:
         current = float(levels.get("current") or 0)
         prev = float(rows[-2].get("close") or current) if len(rows) > 1 else current
         change_color = COLORS["coral"] if current >= prev else COLORS["green"]
-        canvas.create_text(pad_left, 20, text=f"{name} {period} 走势｜{trend}", anchor=tk.W, fill=COLORS["sage_dark"], font=("Microsoft YaHei UI", 12, "bold"))
+        canvas.create_text(pad_left, 20, text=f"{name} {period} 走势｜{trend}", anchor=tk.W, fill="#EAF3FF", font=("Microsoft YaHei UI", 12, "bold"))
         canvas.create_text(width - pad_right, 20, text=f"现价 {current:.2f}", anchor=tk.E, fill=change_color, font=("Microsoft YaHei UI", 12, "bold"))
-        canvas.create_text(pad_left, height - 18, text=str(rows[0].get("label") or ""), anchor=tk.W, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
-        canvas.create_text(width - pad_right, height - 18, text=str(rows[-1].get("label") or ""), anchor=tk.E, fill=COLORS["muted"], font=("Microsoft YaHei UI", 8))
+        canvas.create_text(pad_left, height - 18, text=str(rows[0].get("label") or ""), anchor=tk.W, fill="#92A9C4", font=("Microsoft YaHei UI", 8))
+        canvas.create_text(width - pad_right, height - 18, text=str(rows[-1].get("label") or ""), anchor=tk.E, fill="#92A9C4", font=("Microsoft YaHei UI", 8))
 
     def _chart_summary_text(self, payload: dict[str, object]) -> str:
         levels = payload.get("levels") if isinstance(payload.get("levels"), dict) else {}
