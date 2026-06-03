@@ -48,8 +48,15 @@ EASTMONEY_STOCK_SECTORS_URL = "https://push2.eastmoney.com/api/qt/slist/get"
 EASTMONEY_CONCEPT_BOARDS_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/latest"
 RELEASE_PAGE_URL = "https://github.com/Roypic/Astock_t/releases/latest"
+WINDOWS_LATEST_EXE_URL = "https://github.com/Roypic/Astock_t/releases/download/windows-latest/AShareTSignalMonitor.exe"
 EXE_ASSET_NAME = "AShareTSignalMonitor.exe"
 DESKTOP_SHORTCUT_NAME = "A股做T信号监控.lnk"
+GITHUB_DOWNLOAD_MIRRORS = (
+    "https://gh.llkk.cc/",
+    "https://ghproxy.net/",
+    "https://hub.gitmirror.com/",
+    "https://gh-proxy.com/",
+)
 INFO_QUERIES = (
     "剑桥科技 CPO 光模块",
     "东山精密 PCB AI服务器 光模块",
@@ -2004,7 +2011,7 @@ class MonitorApp:
             return
         self.status_var.set("正在检查更新")
         self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["sage_dark"])
-        self._log("正在从 GitHub 检查并下载最新版")
+        self._log("正在检查新版；GitHub 不通时会自动尝试国内可访问的镜像下载源")
         threading.Thread(target=self._run_update_download, daemon=True).start()
 
     def _run_update_download(self) -> None:
@@ -2021,52 +2028,90 @@ class MonitorApp:
             self.queue.put(("log", f"更新失败：{exc}"))
 
     def _download_latest_exe(self) -> dict[str, object]:
-        req = urllib.request.Request(
-            LATEST_RELEASE_API,
-            headers={"Accept": "application/vnd.github+json", "User-Agent": "AShareTSignalMonitor/1.0"},
-        )
-        with safe_urlopen(req, timeout=15) as resp:
-            release = json.loads(resp.read().decode("utf-8"))
-        release_sha = str(release.get("target_commitish") or "")
-        if not re.fullmatch(r"[0-9a-fA-F]{7,40}", release_sha):
-            match = re.search(r"Commit:\s*([0-9a-fA-F]{7,40})", str(release.get("body") or ""))
-            release_sha = match.group(1) if match else ""
-        release_short = release_sha[:7] if release_sha else ""
-        current_short = str(BUILD_SHA)[:7]
-        if current_short != "dev" and release_short == current_short:
-            return {
-                "current": True,
-                "updated_at": str(release.get("published_at") or "-"),
-                "sha": release_short,
-            }
+        release: dict[str, object] = {}
+        release_short = ""
+        updated_at = "-"
+        try:
+            req = urllib.request.Request(
+                LATEST_RELEASE_API,
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "AShareTSignalMonitor/1.0"},
+            )
+            with safe_urlopen(req, timeout=15) as resp:
+                release = json.loads(resp.read().decode("utf-8"))
+            release_sha = str(release.get("target_commitish") or "")
+            if not re.fullmatch(r"[0-9a-fA-F]{7,40}", release_sha):
+                match = re.search(r"Commit:\s*([0-9a-fA-F]{7,40})", str(release.get("body") or ""))
+                release_sha = match.group(1) if match else ""
+            release_short = release_sha[:7] if release_sha else ""
+            updated_at = str(release.get("published_at") or "-")
+            current_short = str(BUILD_SHA)[:7]
+            if current_short != "dev" and release_short == current_short:
+                return {
+                    "current": True,
+                    "updated_at": updated_at,
+                    "sha": release_short,
+                }
+        except Exception as exc:
+            self.queue.put(("log", f"GitHub API 检查失败，改用直链/镜像下载：{exc}"))
 
-        assets = release.get("assets", [])
-        asset = next((item for item in assets if item.get("name") == EXE_ASSET_NAME), None)
-        if not asset:
-            raise RuntimeError("最新版 release 中没有找到 EXE 文件")
-
-        download_url = asset.get("browser_download_url")
-        if not download_url:
-            raise RuntimeError("最新版 EXE 缺少下载链接")
+        download_url = WINDOWS_LATEST_EXE_URL
+        if release:
+            assets = release.get("assets", [])
+            if isinstance(assets, list):
+                asset = next((item for item in assets if isinstance(item, dict) and item.get("name") == EXE_ASSET_NAME), None)
+                if asset and asset.get("browser_download_url"):
+                    download_url = str(asset["browser_download_url"])
+                    updated_at = str(asset.get("updated_at") or updated_at)
 
         updates_dir = app_dir() / "updates"
         updates_dir.mkdir(parents=True, exist_ok=True)
         suffix = release_short or datetime.now(BEIJING_TZ).strftime("%Y%m%d%H%M%S")
         target = updates_dir / f"AShareTSignalMonitor-{suffix}.exe"
-        req = urllib.request.Request(download_url, headers={"User-Agent": "AShareTSignalMonitor/1.0"})
-        with safe_urlopen(req, timeout=60) as resp, target.open("wb") as out:
-            shutil.copyfileobj(resp, out)
-        if target.stat().st_size < 1024 * 1024:
-            raise RuntimeError("下载文件过小，可能不是有效 EXE")
-        with target.open("rb") as handle:
-            if handle.read(2) != b"MZ":
-                raise RuntimeError("下载文件不是有效 Windows EXE，请稍后重试")
+        used_url = self._download_with_mirrors(download_url, target)
         return {
             "current": False,
             "file": str(target),
-            "updated_at": str(asset.get("updated_at") or release.get("published_at") or "-"),
+            "download_url": used_url,
+            "updated_at": updated_at,
             "sha": release_short,
         }
+
+    def _download_with_mirrors(self, download_url: str, target: Path) -> str:
+        errors = []
+        for url in self._download_candidates(download_url):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "AShareTSignalMonitor/1.0"})
+                with safe_urlopen(req, timeout=75) as resp, target.open("wb") as out:
+                    shutil.copyfileobj(resp, out)
+                if target.stat().st_size < 1024 * 1024:
+                    raise RuntimeError("下载文件过小，可能不是有效 EXE")
+                with target.open("rb") as handle:
+                    if handle.read(2) != b"MZ":
+                        raise RuntimeError("下载文件不是有效 Windows EXE")
+                self.queue.put(("log", f"更新包下载成功：{url}"))
+                return url
+            except Exception as exc:
+                errors.append(f"{url}: {exc}")
+                self.queue.put(("log", f"下载源不可用，继续尝试下一个：{url}"))
+                try:
+                    if target.exists():
+                        target.unlink()
+                except Exception:
+                    pass
+        raise RuntimeError("所有下载源都失败：\n" + "\n".join(errors[-5:]))
+
+    def _download_candidates(self, download_url: str) -> list[str]:
+        urls = [download_url, WINDOWS_LATEST_EXE_URL]
+        for base in GITHUB_DOWNLOAD_MIRRORS:
+            urls.append(base.rstrip("/") + "/" + download_url)
+            urls.append(base.rstrip("/") + "/" + WINDOWS_LATEST_EXE_URL)
+        deduped = []
+        seen = set()
+        for url in urls:
+            if url not in seen:
+                seen.add(url)
+                deduped.append(url)
+        return deduped
 
     def _install_update(self, update_file: Path) -> None:
         flags = 0
@@ -4004,9 +4049,10 @@ class MonitorApp:
                 update_file = Path(str(info.get("file", "")))
                 updated_at = info.get("updated_at", "-")
                 sha = info.get("sha", "-")
+                download_url = info.get("download_url", "-")
                 should_install = messagebox.askyesno(
                     "更新程序",
-                    f"新版已下载。\n版本：{sha}\n更新时间：{updated_at}\n\n是否现在打开新版？当前窗口会关闭，旧版文件会保留。",
+                    f"新版已下载。\n版本：{sha}\n更新时间：{updated_at}\n下载源：{download_url}\n\n是否现在打开新版？当前窗口会关闭，旧版文件会保留。",
                 )
                 if should_install and update_file.exists():
                     self._install_update(update_file)
