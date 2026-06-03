@@ -52,6 +52,7 @@ EASTMONEY_CONCEPT_BOARDS_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 LATEST_RELEASE_API = "https://api.github.com/repos/Roypic/Astock_t/releases/latest"
 RELEASE_PAGE_URL = "https://github.com/Roypic/Astock_t/releases/latest"
 WINDOWS_LATEST_EXE_URL = "https://github.com/Roypic/Astock_t/releases/download/windows-latest/AShareTSignalMonitor.exe"
+WINDOWS_V2_EXE_URL = "https://github.com/Roypic/Astock_t/releases/download/windows-v2-latest/AShareTSignalMonitor.exe"
 EXE_ASSET_NAME = "AShareTSignalMonitor.exe"
 DESKTOP_SHORTCUT_NAME = "A股做T行情终端.lnk"
 GITHUB_DOWNLOAD_MIRRORS = (
@@ -802,7 +803,8 @@ class MonitorApp:
         self._flat_button(controls_top, "小作文雷达", self._open_rumor_radar_window).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "自选走势", self._open_watch_chart_window, "dark").pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "AI研报", self._open_research_report_window).pack(side=tk.LEFT, padx=(0, 8))
-        self._flat_button(controls_top, "更新程序", self._check_update).pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "更新 v1 稳定版", self._check_update).pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "更新 v2 预览版", self._check_update_v2).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "桌面图标", self._create_desktop_shortcut).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "测试推送", self._test_push).pack(side=tk.LEFT)
         tk.Checkbutton(
@@ -2551,6 +2553,20 @@ class MonitorApp:
         self._log("正在检查新版；GitHub 不通时会自动尝试国内可访问的镜像下载源")
         threading.Thread(target=self._run_update_download, daemon=True).start()
 
+    def _check_update_v2(self) -> None:
+        if not getattr(sys, "frozen", False):
+            webbrowser.open(WINDOWS_V2_EXE_URL)
+            messagebox.showinfo("源码模式", "当前不是打包后的 EXE，已打开 v2 预览版下载链接。")
+            return
+        if messagebox.askyesno(
+            "更新 v2 预览版",
+            "v2 是 PySide6 现代界面预览版，当前功能尚未完全覆盖 v1。\n\n是否下载并打开 v2 预览版？旧版稳定版会保留。",
+        ):
+            self.status_var.set("正在下载 v2")
+            self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["sage_dark"])
+            self._log("正在下载 v2 预览版；v1 稳定版会保留")
+            threading.Thread(target=self._run_update_v2_download, daemon=True).start()
+
     def _run_update_download(self) -> None:
         try:
             update = self._download_latest_exe()
@@ -2563,6 +2579,15 @@ class MonitorApp:
         except Exception as exc:
             self.queue.put(("update_error", str(exc)))
             self.queue.put(("log", f"更新失败：{exc}"))
+
+    def _run_update_v2_download(self) -> None:
+        try:
+            update = self._download_v2_exe()
+            self.queue.put(("update_ready", update))
+            self.queue.put(("log", f"v2 预览版已下载：{Path(str(update['file'])).name}"))
+        except Exception as exc:
+            self.queue.put(("update_error", str(exc)))
+            self.queue.put(("log", f"v2 下载失败：{exc}"))
 
     def _download_latest_exe(self) -> dict[str, object]:
         release: dict[str, object] = {}
@@ -2611,6 +2636,20 @@ class MonitorApp:
             "download_url": used_url,
             "updated_at": updated_at,
             "sha": release_short,
+        }
+
+    def _download_v2_exe(self) -> dict[str, object]:
+        updates_dir = app_dir() / "updates"
+        updates_dir.mkdir(parents=True, exist_ok=True)
+        suffix = datetime.now(BEIJING_TZ).strftime("v2-%Y%m%d%H%M%S")
+        target = updates_dir / f"AShareTSignalMonitor-{suffix}.exe"
+        used_url = self._download_with_mirrors(WINDOWS_V2_EXE_URL, target)
+        return {
+            "current": False,
+            "file": str(target),
+            "download_url": used_url,
+            "updated_at": "-",
+            "sha": "v2-preview",
         }
 
     def _download_with_mirrors(self, download_url: str, target: Path) -> str:

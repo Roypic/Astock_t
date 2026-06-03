@@ -1,0 +1,67 @@
+name: Build Windows EXE v2 Preview
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip pyinstaller certifi PySide6
+
+      - name: Write build info
+        working-directory: backend
+        run: Set-Content -Path build_info.py -Value "BUILD_SHA = '${{ github.sha }}-v2'"
+
+      - name: Build v2 EXE
+        working-directory: backend
+        run: >
+          python -m PyInstaller
+          --onefile
+          --windowed
+          --name AShareTSignalMonitor
+          --add-data "models;models"
+          --hidden-import certifi
+          --hidden-import PySide6.QtCore
+          --hidden-import PySide6.QtGui
+          --hidden-import PySide6.QtWidgets
+          --collect-data certifi
+          --collect-all PySide6
+          --clean
+          qt_monitor.py
+
+      - name: Upload v2 EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AShareTSignalMonitor-windows-v2
+          path: backend/dist/AShareTSignalMonitor.exe
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: windows-v2-latest
+          name: Windows v2 Preview
+          body: "Latest Windows v2 preview build. This PySide6 UI is experimental and does not yet replace the full v1 feature set. Commit: ${{ github.sha }}"
+          files: backend/dist/AShareTSignalMonitor.exe
+          make_latest: false
+          prerelease: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
