@@ -494,6 +494,7 @@ class MonitorWindow(QMainWindow):
             ("自选信息面", self._open_custom_info_window, "ghost"),
             ("小作文雷达", self._open_rumor_radar_window, "ghost"),
             ("自选走势", self._open_watch_chart_window, "ghost"),
+            ("定投择时", self._open_fund_dca_window, "ghost"),
             ("AI研报", self._open_research_report_window, "ghost"),
             ("桌面图标", self._create_desktop_shortcut, "ghost"),
         ]

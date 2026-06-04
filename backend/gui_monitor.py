@@ -866,6 +866,7 @@ class MonitorApp:
         self._flat_button(controls_top, "自选信息面", self._open_custom_info_window).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "小作文雷达", self._open_rumor_radar_window).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "自选走势", self._open_watch_chart_window, "dark").pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "定投择时", self._open_fund_dca_window).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "AI研报", self._open_research_report_window).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "更新 v1 稳定版", self._check_update).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "更新 v2 预览版", self._check_update_v2).pack(side=tk.LEFT, padx=(0, 8))
@@ -1590,6 +1591,70 @@ class MonitorApp:
         period_box.bind("<<ComboboxSelected>>", lambda _event: run_chart())
         entry.focus_set()
 
+    def _open_fund_dca_window(self) -> None:
+        window = tk.Toplevel(self.root)
+        window.title("场内基金定投择时")
+        window.geometry("880x640")
+        window.configure(bg=COLORS["bg"])
+
+        panel = ttk.Frame(window, style="Card.TFrame", padding=14)
+        panel.pack(fill=tk.X, padx=14, pady=(14, 8))
+        panel.columnconfigure(1, weight=1)
+
+        query_var = tk.StringVar(value="通信ETF")
+        amount_var = tk.StringVar(value="1000")
+        status_var = tk.StringVar(value="输入场内 ETF/基金代码或简称，按盘中价格给定投择时建议。")
+
+        ttk.Label(panel, text="场内基金", style="Muted.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
+        entry = ttk.Entry(panel, textvariable=query_var)
+        entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 10))
+        ttk.Label(panel, text="基础金额", style="Muted.TLabel").grid(row=0, column=2, sticky=tk.E, padx=(0, 8))
+        ttk.Entry(panel, textvariable=amount_var, width=10).grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
+
+        result = tk.Text(
+            window,
+            wrap=tk.WORD,
+            bg=COLORS["card"],
+            fg=COLORS["text"],
+            relief=tk.FLAT,
+            padx=16,
+            pady=14,
+            font=("Microsoft YaHei UI", 10),
+        )
+        result.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
+        tk.Label(
+            window,
+            textvariable=status_var,
+            bg=COLORS["bg"],
+            fg=COLORS["muted"],
+            anchor=tk.W,
+            font=("Microsoft YaHei UI", 9),
+        ).pack(fill=tk.X, padx=16, pady=(0, 10))
+
+        def run_dca() -> None:
+            query = query_var.get().strip()
+            if not query:
+                messagebox.showwarning("缺少基金", "请输入场内基金/ETF代码或简称。")
+                return
+            result.configure(state=tk.NORMAL)
+            result.delete("1.0", tk.END)
+            result.insert(tk.END, "正在读取场内基金分时和日线...\n")
+            result.configure(state=tk.DISABLED)
+            status_var.set("正在计算场内定投择时...")
+
+            def worker() -> None:
+                try:
+                    content = self._build_intraday_etf_dca_report(query, amount_var.get().strip())
+                    self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": content}))
+                except Exception as exc:
+                    self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": f"定投择时失败：{exc}"}))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        ttk.Button(panel, text="计算", style="Primary.TButton", command=run_dca).grid(row=0, column=4, sticky=tk.E)
+        entry.bind("<Return>", lambda _event: run_dca())
+        entry.focus_set()
+
     def _build_chart_payload(self, query: str, period: str) -> dict[str, object]:
         code = self._resolve_stock_code(query)
         if not code:
@@ -1606,6 +1671,152 @@ class MonitorApp:
         info = self._fetch_security_info(code)
         name = str(info.get("symbol_name") or query)
         return {"query": query, "name": name, "code": code, "period": period, "rows": rows, "levels": levels, "order_book": order_book}
+
+    def _build_intraday_etf_dca_report(self, query: str, amount_text: str = "") -> str:
+        code = self._resolve_stock_code(query)
+        if not code:
+            raise RuntimeError("没有识别到场内基金代码，请输入 6 位代码或已内置的 ETF 简称。")
+        ft_code = self._to_ft_stock_code(code)
+        if not is_etf_code(ft_code):
+            raise RuntimeError("这个功能面向场内基金/ETF，请输入 15/16/18/51/52/56/58 开头的场内基金代码。")
+        try:
+            base_amount = max(0.0, float(amount_text or 1000))
+        except ValueError:
+            base_amount = 1000.0
+
+        client = MarketClient(ttl_seconds=20)
+        prices = client.get_stock_prices(ft_code)
+        if len(prices) < 20:
+            raise RuntimeError("分时数据不足，可能非交易时间或接口暂时无数据。")
+        current_row = prices[-1]
+        day_prices = [item for item in prices if item.day == current_row.day]
+        if len(day_prices) < 20:
+            raise RuntimeError("当日分时样本不足，暂不生成择时建议。")
+        rows = [
+            {"label": item.minute, "close": item.price, "high": item.price, "low": item.price, "volume": item.volume}
+            for item in day_prices
+        ]
+        daily_rows = self._fetch_ohlc_chart_rows(ft_code, "日线")
+        if len(daily_rows) < 20:
+            raise RuntimeError("日线数据不足，无法判断长期定投温度。")
+
+        levels = self._chart_levels(rows)
+        current = current_row.price
+        open_price = day_prices[0].price
+        avg_price = current_row.avg_price or current
+        day_low = min(item.price for item in day_prices)
+        day_high = max(item.price for item in day_prices)
+        day_range = max(day_high - day_low, current * 0.001)
+        day_position = (current - day_low) / day_range
+        day_return = current / open_price - 1 if open_price else 0.0
+        avg_gap = current / avg_price - 1 if avg_price else 0.0
+        support = float(levels.get("support") or day_low)
+        resistance = float(levels.get("resistance") or day_high)
+        support_gap = current / support - 1 if support else 0.0
+        resistance_gap = resistance / current - 1 if current else 0.0
+        volume_ratio = float(levels.get("volume_ratio") or 1.0)
+
+        closes = [float(row["close"]) for row in daily_rows if "close" in row]
+        ma20 = sum(closes[-20:]) / 20
+        ma60 = sum(closes[-60:]) / 60 if len(closes) >= 60 else ma20
+        ret5 = current / closes[-5] - 1 if len(closes) >= 5 and closes[-5] else 0.0
+        ret20 = current / closes[-20] - 1 if len(closes) >= 20 and closes[-20] else 0.0
+        dist20 = current / ma20 - 1 if ma20 else 0.0
+        dist60 = current / ma60 - 1 if ma60 else 0.0
+
+        temperature = 50.0
+        temperature += max(-18, min(18, dist20 * 240))
+        temperature += max(-16, min(16, dist60 * 160))
+        temperature += max(-12, min(12, ret20 * 110))
+        temperature += max(-8, min(8, ret5 * 140))
+        temperature += 8 if day_position >= 0.78 and day_return > 0 else 0
+        temperature -= 8 if day_position <= 0.28 and day_return < 0 else 0
+        temperature = max(0.0, min(100.0, temperature))
+
+        multiplier = 1.0
+        reasons: list[str] = []
+        if temperature <= 25:
+            multiplier += 0.8
+            reasons.append("中期温度偏冷，适合增强定投")
+        elif temperature <= 40:
+            multiplier += 0.35
+            reasons.append("中期温度偏低，可略微加大买入")
+        elif temperature >= 78:
+            multiplier -= 0.65
+            reasons.append("中期温度偏热，长期定投不宜追高")
+        elif temperature >= 65:
+            multiplier -= 0.35
+            reasons.append("中期温度偏高，建议减半或等回落")
+
+        if day_position <= 0.25 and avg_gap <= 0:
+            multiplier += 0.35
+            reasons.append("当前接近日内低位且低于均价，盘中价格相对友好")
+        elif day_position >= 0.78 and avg_gap > 0:
+            multiplier -= 0.45
+            reasons.append("当前接近日内高位且高于均价，容易买在日内偏贵区")
+        if support_gap <= 0.006:
+            multiplier += 0.20
+            reasons.append("现价靠近日内支撑，适合分批挂低吸")
+        if resistance_gap <= 0.006 and day_position >= 0.65:
+            multiplier -= 0.25
+            reasons.append("现价靠近日内压力，上方空间较窄")
+        if volume_ratio >= 1.6 and day_return < 0 and day_position <= 0.45:
+            multiplier += 0.20
+            reasons.append("放量下跌但未处在最低位，可能已有承接")
+        if volume_ratio >= 1.6 and day_return > 0 and day_position >= 0.75:
+            multiplier -= 0.25
+            reasons.append("放量上涨且处在高位，追价风险较高")
+        multiplier = max(0.0, min(2.0, multiplier))
+
+        suggested_amount = base_amount * multiplier
+        buy_low = min(support, avg_price, current) * 0.998
+        buy_high = min(max(support * 1.006, avg_price * 1.002), current * 1.002)
+        chase_stop = max(current * 1.002, avg_price, resistance * 0.995)
+        add_trigger = min(current * 0.998, max(day_low, support) * 1.003)
+
+        if multiplier >= 1.45:
+            action = "增强买入"
+            timing = "可以现在先买一部分，并在支撑/均价附近继续挂低吸。"
+        elif multiplier >= 0.85:
+            action = "标准定投"
+            timing = "不追高，优先等价格回到均价附近；若临近收盘仍不回落，可按标准金额买。"
+        elif multiplier > 0:
+            action = "减半/小额买"
+            timing = "今天价格不够舒服，除非回踩到支撑附近，否则只买小额。"
+        else:
+            action = "暂停追买"
+            timing = "今天不适合追，等回落到均价/支撑区再考虑。"
+
+        if day_position >= 0.78 and avg_gap > 0:
+            timing = "先别追，等回踩均价或支撑区；如果一直强到收盘，只按小额/标准定投处理。"
+        elif day_position <= 0.25 and avg_gap <= 0:
+            timing = "当前接近日内低位，可分两笔：现在一笔，若跌到支撑附近再补一笔。"
+
+        info = self._fetch_security_info(code)
+        name = str(info.get("symbol_name") or query)
+        now = datetime.now(BEIJING_TZ)
+        amount_display = f"{suggested_amount:.0f}" if base_amount else "按你的计划金额"
+        base_display = f"{base_amount:.0f}" if base_amount else "未填写"
+        return "\n".join(
+            [
+                f"场内基金定投择时：{name}（{code}）",
+                f"北京时间 {now.strftime('%Y-%m-%d %H:%M')}；口径：场内 ETF 盘中成交价，不是场外基金净值。",
+                "",
+                f"今日建议：{action}；建议金额：{amount_display} 元（基础金额 {base_display}，倍率 {multiplier:.2f}x）。",
+                f"执行方式：{timing}",
+                f"参考低吸区：{buy_low:.3f}-{buy_high:.3f}；若冲到 {chase_stop:.3f} 上方且不回落，不建议追加。",
+                f"加仓触发：若回踩 {add_trigger:.3f} 附近且不放量破位，可补第二笔；若跌破 {support * 0.994:.3f} 后不能收回，今天先停。",
+                "",
+                f"盘中状态：现价 {current:.3f}，较开盘 {day_return * 100:+.2f}%，较均价 {avg_gap * 100:+.2f}%，日内位置 {day_position * 100:.0f}%。",
+                f"支撑 {support:.3f}（距现价 {support_gap * 100:+.2f}%），压力 {resistance:.3f}（上方 {resistance_gap * 100:.2f}%），量能比 {volume_ratio:.2f}。",
+                f"中期温度：{temperature:.0f}/100；MA20 {ma20:.3f}，MA60 {ma60:.3f}，近5日 {ret5 * 100:+.2f}%，近20日 {ret20 * 100:+.2f}%。",
+                "",
+                "理由：",
+                *(f"- {item}" for item in (reasons or ["盘中价格和中期温度都没有明显极端，按计划定投即可。"])),
+                "",
+                "长期定投提醒：这个功能只帮你优化场内买入时点和金额倍率，不建议因为一天的波动改变长期资产配置。",
+            ]
+        )
 
     def _to_ft_stock_code(self, code: str) -> str:
         upper = code.upper()
