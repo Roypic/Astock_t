@@ -1601,6 +1601,7 @@ class MonitorApp:
         levels = self._chart_levels(rows)
         order_book = self._fetch_order_book(code)
         levels["fund_behavior"] = self._fund_behavior_analysis(rows, levels, order_book, period)
+        levels["trade_flow"] = self._trade_flow_inference(rows, levels, order_book, period)
         levels["trade_advice"] = self._intraday_trade_advice(rows, levels, order_book, period)
         info = self._fetch_security_info(code)
         name = str(info.get("symbol_name") or query)
@@ -1940,6 +1941,8 @@ class MonitorApp:
         order_text = self._order_book_summary_text(order_book)
         behavior = levels.get("fund_behavior") if isinstance(levels.get("fund_behavior"), dict) else {}
         behavior_text = self._fund_behavior_summary_text(behavior)
+        flow = levels.get("trade_flow") if isinstance(levels.get("trade_flow"), dict) else {}
+        flow_text = self._trade_flow_summary_text(flow)
         advice = levels.get("trade_advice") if isinstance(levels.get("trade_advice"), dict) else {}
         advice_text = self._trade_advice_summary_text(advice)
         return (
@@ -1949,8 +1952,9 @@ class MonitorApp:
             f"多级支撑：{self._fmt_price_list(supports)}；多级压力：{self._fmt_price_list(resistances)}。\n"
             f"筹码密集区：{chip_text or '样本不足'}；均线趋势：{levels.get('trend', '未知')}，{ma_text}；量价状态：{volume_note}（量能比 {volume_ratio:.2f}）。\n"
             f"{behavior_text}\n"
+            f"{flow_text}\n"
             f"{order_text}\n"
-            "说明：支撑/压力来自近段高低价分位，筹码区来自成交量加权价格分布；资金行为是基于量价/VSA/五档委比的推断，不是真实账户分类或Level-2逐笔结论。"
+            "说明：支撑/压力来自近段高低价分位，筹码区来自成交量加权价格分布；资金/成交行为是基于量价/VSA/五档委比的推断，不是真实账户分类或Level-2逐笔结论。"
         )
 
     def _intraday_trade_advice(
@@ -2112,6 +2116,197 @@ class MonitorApp:
             f"- 参考区间：{advice.get('entry_zone', '-')}；{advice.get('exit_zone', '-')}\n"
             f"- 失效条件：{advice.get('invalid', '-')}\n"
             f"- 理由：{reason_text or '-'}。"
+        )
+
+    def _trade_flow_inference(
+        self,
+        rows: list[dict[str, float | str]],
+        levels: dict[str, object],
+        order_book: dict[str, object],
+        period: str,
+    ) -> dict[str, object]:
+        closes = [float(row["close"]) for row in rows if "close" in row]
+        volumes = [max(0.0, float(row.get("volume") or 0)) for row in rows if "close" in row]
+        if len(closes) < 12 or len(volumes) != len(closes):
+            return {
+                "verdict": "样本不足",
+                "confidence": 20,
+                "scores": {},
+                "evidence": ["分时成交样本不足，暂不做成交结构推断。"],
+                "warning": "非逐笔成交，仅为量价推断。",
+            }
+
+        recent_n = min(30, len(closes))
+        start_index = len(closes) - recent_n
+        recent_closes = closes[start_index:]
+        recent_volumes = volumes[start_index:]
+        avg_volume = sum(recent_volumes) / max(1, len(recent_volumes))
+        median_volume = sorted(recent_volumes)[len(recent_volumes) // 2] or avg_volume or 1.0
+        abnormal_cutoff = max(avg_volume * 1.55, median_volume * 1.8, 1.0)
+
+        up_big = 0.0
+        down_big = 0.0
+        flat_big = 0.0
+        up_volume = 0.0
+        down_volume = 0.0
+        flat_volume = 0.0
+        big_up_count = 0
+        big_down_count = 0
+        absorb_count = 0
+        chase_count = 0
+        dump_count = 0
+        reversal_count = 0
+        last_sign = 0
+        high = max(recent_closes)
+        low = min(recent_closes)
+        price_range = max(high - low, closes[-1] * 0.002)
+        for offset in range(max(1, start_index), len(closes)):
+            change = closes[offset] / closes[offset - 1] - 1 if closes[offset - 1] else 0.0
+            sign = 1 if change > 0 else -1 if change < 0 else 0
+            vol = volumes[offset]
+            if sign > 0:
+                up_volume += vol
+                if vol >= abnormal_cutoff:
+                    up_big += vol
+                    big_up_count += 1
+                    if change >= 0.0015:
+                        chase_count += 1
+            elif sign < 0:
+                down_volume += vol
+                if vol >= abnormal_cutoff:
+                    down_big += vol
+                    big_down_count += 1
+                    if change <= -0.0015:
+                        dump_count += 1
+            else:
+                flat_volume += vol
+                if vol >= abnormal_cutoff:
+                    flat_big += vol
+            if sign and last_sign and sign != last_sign:
+                reversal_count += 1
+            if sign:
+                last_sign = sign
+        current = closes[-1]
+        recent_return = current / recent_closes[0] - 1 if recent_closes[0] else 0.0
+        close_position = (current - low) / price_range
+        support = self._safe_float(levels.get("support")) or low
+        resistance = self._safe_float(levels.get("resistance")) or high
+        chip_peak = self._safe_float(levels.get("chip_peak")) or current
+        volume_ratio = float(levels.get("volume_ratio") or 1.0)
+        imbalance = self._safe_float(order_book.get("imbalance")) if isinstance(order_book, dict) else None
+        imbalance = imbalance if imbalance is not None else 0.0
+        directional = up_volume + down_volume or 1.0
+        big_total = up_big + down_big + flat_big or 1.0
+        up_big_share = up_big / big_total
+        down_big_share = down_big / big_total
+        flat_big_share = flat_big / big_total
+        buy_share = up_volume / directional
+        sell_share = down_volume / directional
+        near_support = current <= support * 1.015 or abs(current / chip_peak - 1) <= 0.012
+        near_resistance = current >= resistance * 0.985
+        price_efficiency = abs(recent_return) / max(0.001, price_range / current if current else 0.001)
+
+        large_absorb = 28
+        active_buy = 25
+        active_sell = 24
+        retail_chase = 18
+        no_bid = 20
+        if up_big_share >= 0.52:
+            active_buy += 24
+            large_absorb += 10
+        if down_big_share >= 0.52:
+            active_sell += 24
+            no_bid += 8
+        if flat_big_share >= 0.28 and near_support and close_position >= 0.45:
+            large_absorb += 24
+            absorb_count += 1
+        if big_down_count >= 2 and near_support and close_position >= 0.45:
+            large_absorb += 18
+            absorb_count += 1
+        if buy_share >= 0.57 and recent_return >= 0:
+            active_buy += 16
+        if sell_share >= 0.58 and recent_return <= 0:
+            active_sell += 16
+        if imbalance >= 0.18:
+            large_absorb += 10
+            active_buy += 8
+            no_bid -= 8
+        elif imbalance <= -0.18:
+            active_sell += 10
+            no_bid += 14
+        if near_resistance and volume_ratio >= 1.15 and close_position <= 0.45:
+            active_sell += 16
+            retail_chase += 10
+        if chase_count >= 2 and near_resistance:
+            retail_chase += 28
+        if dump_count >= 2 and close_position <= 0.35:
+            active_sell += 16
+            no_bid += 16
+        if recent_return < -0.012 and volume_ratio < 0.9:
+            no_bid += 22
+        if recent_return < -0.01 and down_big_share >= 0.5:
+            no_bid += 18
+        if reversal_count >= recent_n * 0.42 and price_efficiency <= 0.5:
+            retail_chase += 12
+        if period != "分时":
+            large_absorb = max(0, large_absorb - 8)
+            active_buy = max(0, active_buy - 6)
+            active_sell = max(0, active_sell - 6)
+
+        scores = {
+            "大单承接": self._score_clip(large_absorb),
+            "主动买盘": self._score_clip(active_buy),
+            "主动卖盘": self._score_clip(active_sell),
+            "散户跟风": self._score_clip(retail_chase),
+            "无承接风险": self._score_clip(no_bid),
+        }
+        verdict, top_score = max(scores.items(), key=lambda item: item[1])
+        sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        if len(sorted_scores) > 1 and sorted_scores[0][1] - sorted_scores[1][1] <= 7:
+            verdict = f"{sorted_scores[0][0]}偏{sorted_scores[1][0]}"
+        evidence = [
+            f"近{recent_n}根大单量柱：上涨{up_big_share * 100:.0f}%，下跌{down_big_share * 100:.0f}%，横盘{flat_big_share * 100:.0f}%",
+            f"方向成交量：上涨{buy_share * 100:.0f}%，下跌{sell_share * 100:.0f}%；异常上/下量柱 {big_up_count}/{big_down_count}",
+            f"近段涨跌 {recent_return * 100:+.2f}%，收在区间 {close_position * 100:.0f}%，五档委比 {imbalance * 100:+.1f}%",
+        ]
+        if absorb_count:
+            evidence.append("下跌/横盘放量后价格未继续破位，偏大单承接或换手吸收。")
+        if chase_count >= 2:
+            evidence.append("拉升异常量柱较多，若贴近压力区要防跟风追高。")
+        if dump_count >= 2:
+            evidence.append("下跌异常量柱较多，若收在低位更像主动卖压。")
+        if near_resistance:
+            evidence.append("位置靠近压力区，成交放大时更要看是否能有效突破。")
+        if near_support:
+            evidence.append("位置靠近支撑/筹码峰，重点看放量后是否守住。")
+
+        return {
+            "verdict": verdict,
+            "confidence": self._score_clip(top_score),
+            "scores": scores,
+            "evidence": evidence,
+            "metrics": {
+                "recent_return_pct": round(recent_return * 100, 2),
+                "up_big_share_pct": round(up_big_share * 100, 1),
+                "down_big_share_pct": round(down_big_share * 100, 1),
+                "buy_volume_share_pct": round(buy_share * 100, 1),
+                "sell_volume_share_pct": round(sell_share * 100, 1),
+                "abnormal_up_count": big_up_count,
+                "abnormal_down_count": big_down_count,
+            },
+            "warning": "这是由分钟成交量和五档盘口推断的大单/散户倾向，不是逐笔成交或真实账户分类。",
+        }
+
+    def _trade_flow_summary_text(self, flow: dict[str, object]) -> str:
+        if not flow:
+            return "成交单推断：暂未生成。"
+        scores = flow.get("scores") if isinstance(flow.get("scores"), dict) else {}
+        score_text = "｜".join(f"{key}{value}" for key, value in scores.items()) if scores else "-"
+        evidence = flow.get("evidence") if isinstance(flow.get("evidence"), list) else []
+        evidence_text = "；".join(str(item).rstrip("。；; ") for item in evidence[:4])
+        return (
+            f"成交单推断：{flow.get('verdict', '-')}（置信 {flow.get('confidence', '-')}/100）。"
+            f"分项：{score_text}。证据：{evidence_text or '-'}。"
         )
 
     def _fund_behavior_analysis(
