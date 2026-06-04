@@ -253,8 +253,25 @@ STOCK_CODE_HINTS = {
     "通信ETF": "515880.SH",
     "科创芯片ETF鹏华": "588920.SH",
     "科创芯片ETF": "588920.SH",
+    "纳斯达克": "513100.SH",
+    "纳指ETF国泰": "513100.SH",
+    "纳指ETF": "513100.SH",
+    "储能ETF": "159566.SZ",
+    "储能电池ETF": "159566.SZ",
+    "储能电池ETF易方达": "159566.SZ",
+    "港美互联网ETF": "160644.SZ",
+    "港美互联网LOF": "160644.SZ",
+    "港美互联": "160644.SZ",
+    "港股互联网ETF": "513770.SH",
     "兴业银锡": "000426.SZ",
     "兴业银": "000426.SZ",
+}
+DCA_PRESET_FUNDS = {
+    "科创芯片ETF鹏华｜588920.SH": "588920.SH",
+    "通信ETF国泰｜515880.SH": "515880.SH",
+    "纳指ETF国泰｜513100.SH": "513100.SH",
+    "储能电池ETF易方达｜159566.SZ": "159566.SZ",
+    "港美互联网LOF｜160644.SZ": "160644.SZ",
 }
 DCA_STRATEGIES = {
     "均线温度": {
@@ -1648,13 +1665,13 @@ class MonitorApp:
         panel.pack(fill=tk.X, padx=14, pady=(14, 8))
         panel.columnconfigure(1, weight=1)
 
-        query_var = tk.StringVar(value="通信ETF")
+        query_var = tk.StringVar(value=next(iter(DCA_PRESET_FUNDS)))
         amount_var = tk.StringVar(value="1000")
         strategy_var = tk.StringVar(value="均线温度")
-        status_var = tk.StringVar(value="输入场内 ETF/基金代码或简称，按盘中价格给定投择时建议。")
+        status_var = tk.StringVar(value="选择内置场内基金，按盘中价格给定投择时建议。")
 
         ttk.Label(panel, text="场内基金", style="Muted.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
-        entry = ttk.Entry(panel, textvariable=query_var)
+        entry = ttk.Combobox(panel, textvariable=query_var, values=tuple(DCA_PRESET_FUNDS), state="readonly")
         entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 10))
         ttk.Label(panel, text="基础金额", style="Muted.TLabel").grid(row=0, column=2, sticky=tk.E, padx=(0, 8))
         ttk.Entry(panel, textvariable=amount_var, width=10).grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
@@ -1683,9 +1700,9 @@ class MonitorApp:
         ).pack(fill=tk.X, padx=16, pady=(0, 10))
 
         def run_dca() -> None:
-            query = query_var.get().strip()
+            query = DCA_PRESET_FUNDS.get(query_var.get().strip(), query_var.get().strip())
             if not query:
-                messagebox.showwarning("缺少基金", "请输入场内基金/ETF代码或简称。")
+                messagebox.showwarning("缺少基金", "请选择内置场内基金。")
                 return
             result.configure(state=tk.NORMAL)
             result.delete("1.0", tk.END)
@@ -1851,6 +1868,8 @@ class MonitorApp:
 
         info = self._fetch_security_info(code)
         name = str(info.get("symbol_name") or query)
+        if "｜" in name:
+            name = name.split("｜", 1)[0]
         now = datetime.now(BEIJING_TZ)
         amount_display = f"{suggested_amount:.0f}" if base_amount else "按你的计划金额"
         base_display = f"{base_amount:.0f}" if base_amount else "未填写"
@@ -2955,6 +2974,13 @@ class MonitorApp:
 
     def _resolve_stock_code(self, query: str) -> str:
         text = query.strip().upper()
+        embedded = re.search(r"(\d{6})\.(SZ|SH)", text)
+        if embedded:
+            return f"{embedded.group(1)}.{embedded.group(2)}"
+        embedded6 = re.search(r"\b(\d{6})\b", text)
+        if embedded6:
+            code6 = embedded6.group(1)
+            return f"{code6}.SH" if code6.startswith(("5", "6")) else f"{code6}.SZ"
         if re.fullmatch(r"\d{6}\.(SZ|SH)", text):
             return text
         if re.fullmatch(r"\d{6}", text):

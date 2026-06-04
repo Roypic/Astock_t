@@ -1045,7 +1045,14 @@ class MonitorWindow(QMainWindow):
         dialog.resize(920, 680)
         layout = QVBoxLayout(dialog)
         bar = QHBoxLayout()
-        query = QLineEdit("通信ETF")
+        query = QComboBox()
+        query.addItems([
+            "科创芯片ETF鹏华｜588920.SH",
+            "通信ETF国泰｜515880.SH",
+            "纳指ETF国泰｜513100.SH",
+            "储能电池ETF易方达｜159566.SZ",
+            "港美互联网LOF｜160644.SZ",
+        ])
         amount = QLineEdit("1000")
         amount.setFixedWidth(96)
         strategy = QComboBox()
@@ -1065,9 +1072,9 @@ class MonitorWindow(QMainWindow):
         layout.addWidget(text)
 
         def execute() -> None:
-            q = query.text().strip()
+            q = query.currentText().strip()
             if not q:
-                QMessageBox.warning(dialog, "缺少基金", "请输入场内基金/ETF代码或简称。")
+                QMessageBox.warning(dialog, "缺少基金", "请选择内置场内基金。")
                 return
             text.setPlainText("正在读取场内基金分时和日线...")
 
@@ -1081,7 +1088,6 @@ class MonitorWindow(QMainWindow):
             threading.Thread(target=worker, daemon=True).start()
 
         run.clicked.connect(execute)
-        query.returnPressed.connect(execute)
         dialog.show()
         self.child_windows.append(dialog)
 
