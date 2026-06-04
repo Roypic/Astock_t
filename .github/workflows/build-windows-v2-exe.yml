@@ -39,6 +39,8 @@ jobs:
           --name AShareTSignalMonitor
           --add-data "models;models"
           --hidden-import certifi
+          --hidden-import next_day_predict
+          --hidden-import rolling_optimize
           --hidden-import PySide6.QtCore
           --hidden-import PySide6.QtGui
           --hidden-import PySide6.QtWidgets

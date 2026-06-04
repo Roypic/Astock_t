@@ -862,6 +862,7 @@ class MonitorApp:
         controls_bottom.pack(fill=tk.X)
         self._flat_button(controls_top, "模型盘前", self._show_premarket_analysis).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "信息面盘前", self._show_info_premarket).pack(side=tk.LEFT, padx=(0, 8))
+        self._flat_button(controls_top, "明日预测", self._show_next_day_prediction).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "自选信息面", self._open_custom_info_window).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "小作文雷达", self._open_rumor_radar_window).pack(side=tk.LEFT, padx=(0, 8))
         self._flat_button(controls_top, "自选走势", self._open_watch_chart_window, "dark").pack(side=tk.LEFT, padx=(0, 8))
@@ -1235,6 +1236,33 @@ class MonitorApp:
         self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["sage_dark"])
         self._log("正在获取信息面盘前摘要")
         threading.Thread(target=self._run_info_premarket, daemon=True).start()
+
+    def _show_next_day_prediction(self) -> None:
+        model_path = Path(self.model_path_var.get().strip())
+        if not model_path.exists():
+            messagebox.showwarning("模型不存在", "请选择模型 JSON 文件或模型文件夹。")
+            return
+        self.status_var.set("正在训练明日预测")
+        self.status_badge.configure(bg=COLORS["cream"], fg=COLORS["sage_dark"])
+        self._log("正在训练明日走势预测模型")
+        threading.Thread(target=self._run_next_day_prediction, args=(model_path,), daemon=True).start()
+
+    def _run_next_day_prediction(self, model_path: Path) -> None:
+        try:
+            from next_day_predict import build_prediction_report
+
+            models = self._filter_models_by_watchlist(load_models(model_path))
+            if not models:
+                raise RuntimeError("自选监控池没有匹配到可预测模型。")
+            report = build_prediction_report(
+                models,
+                since="TRADE_DAYS_AGO(121)",
+                cache_dir=app_dir() / "data" / "next_day_cache",
+            )
+            self.queue.put(("text_window", ("明日走势预测", report)))
+            self.queue.put(("log", f"明日走势预测完成：{len(models)} 个模型"))
+        except Exception as exc:
+            self.queue.put(("error", f"明日走势预测失败：{exc}"))
 
     def _open_custom_info_window(self) -> None:
         window = tk.Toplevel(self.root)

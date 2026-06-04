@@ -490,6 +490,7 @@ class MonitorWindow(QMainWindow):
         feature_buttons: list[tuple[str, Any, str]] = [
             ("模型盘前", self._show_premarket_analysis, "ghost"),
             ("信息面盘前", self._show_info_premarket, "ghost"),
+            ("明日预测", self._show_next_day_prediction, "ghost"),
             ("自选信息面", self._open_custom_info_window, "ghost"),
             ("小作文雷达", self._open_rumor_radar_window, "ghost"),
             ("自选走势", self._open_watch_chart_window, "ghost"),
@@ -932,6 +933,31 @@ class MonitorWindow(QMainWindow):
                 self.queue.put(("log", "信息面盘前摘要已生成"))
             except Exception as exc:
                 self.queue.put(("error", f"信息面盘前失败：{exc}"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_next_day_prediction(self) -> None:
+        model_path = Path(self.model_path.text().strip())
+        if not model_path.exists():
+            QMessageBox.warning(self, "模型不存在", "请选择模型 JSON 文件或模型文件夹。")
+            return
+        self.status_value.setText("训练明日预测")
+        self._log("正在训练明日走势预测模型")
+
+        def worker() -> None:
+            try:
+                from next_day_predict import build_prediction_report
+
+                models = self._selected_models(model_path)
+                report = build_prediction_report(
+                    models,
+                    since="TRADE_DAYS_AGO(121)",
+                    cache_dir=app_dir() / "data" / "next_day_cache",
+                )
+                self.queue.put(("text_window", ("明日走势预测", report)))
+                self.queue.put(("log", f"明日走势预测完成：{len(models)} 个模型"))
+            except Exception as exc:
+                self.queue.put(("error", f"明日走势预测失败：{exc}"))
 
         threading.Thread(target=worker, daemon=True).start()
 
