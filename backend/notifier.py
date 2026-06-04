@@ -21,6 +21,7 @@ def format_signal(signal: dict[str, Any]) -> str:
         f"目标1/2/3：{signal.get('target1_price', '-')}/{signal.get('target2_price', '-')}/{signal.get('target3_price', '-')}",
         f"参考风控价：{signal['stop_price']}",
         f"今日次数：{signal.get('daily_count', '?')}/{signal.get('max_daily_signals', 1)}",
+        f"时段次数：{signal.get('time_bucket', '-')} {signal.get('bucket_count', '?')}/{signal.get('bucket_limit', '?')}",
         f"个股涨幅：{signal.get('own_return_pct')}%",
         f"大盘强弱：{signal.get('market_return_pct')}%",
         f"篮子涨幅：{signal.get('basket_return_pct')}%",

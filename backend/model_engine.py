@@ -36,6 +36,11 @@ TRADING_SESSIONS = (
     ("13:00", "15:00"),
 )
 
+SIGNAL_TIME_BUCKETS = (
+    ("上午", "09:30", "11:30"),
+    ("下午", "13:00", "15:00"),
+)
+
 
 def is_etf_code(code: str) -> bool:
     code6 = str(code or "").upper().split(".", 1)[0]
@@ -160,7 +165,12 @@ class SignalStore:
             return {"signals": []}
         return json.loads(self.path.read_text(encoding="utf-8"))
 
-    def record_if_new(self, signal: dict[str, Any], max_daily_signals: int, min_gap_minutes: int = 0) -> tuple[bool, int]:
+    def record_if_new(
+        self,
+        signal: dict[str, Any],
+        max_daily_signals: int,
+        min_gap_minutes: int = 0,
+    ) -> tuple[bool, int, int, int, str, str]:
         state = self._load()
         signals = state.setdefault("signals", [])
         same_day = [
@@ -168,8 +178,16 @@ class SignalStore:
             for s in signals
             if s.get("code") == signal["code"] and s.get("trade_day") == signal["trade_day"]
         ]
+        bucket_name = _signal_time_bucket(str(signal.get("minute", "")))
+        bucket_limits = _daily_bucket_limits(max_daily_signals)
+        bucket_limit = bucket_limits.get(bucket_name, max_daily_signals)
+        same_bucket = [
+            s
+            for s in same_day
+            if _signal_time_bucket(str(s.get("minute", ""))) == bucket_name
+        ]
         if any(s.get("signal_key") == signal["signal_key"] for s in same_day):
-            return False, len(same_day)
+            return False, len(same_day), len(same_bucket), bucket_limit, bucket_name, "duplicate"
         action = signal.get("action")
         signal_minute = _minute_to_int(str(signal.get("minute", "")))
         if min_gap_minutes > 0 and signal_minute is not None:
@@ -178,12 +196,17 @@ class SignalStore:
                     continue
                 previous_minute = _minute_to_int(str(previous.get("minute", "")))
                 if previous_minute is not None and signal_minute - previous_minute < min_gap_minutes:
-                    return False, len(same_day)
+                    return False, len(same_day), len(same_bucket), bucket_limit, bucket_name, "min_gap"
         if len(same_day) >= max_daily_signals:
-            return False, len(same_day)
+            return False, len(same_day), len(same_bucket), bucket_limit, bucket_name, "daily_limit"
+        if len(same_bucket) >= bucket_limit:
+            return False, len(same_day), len(same_bucket), bucket_limit, bucket_name, "bucket_limit"
+        signal["time_bucket"] = bucket_name
+        signal["bucket_count"] = len(same_bucket) + 1
+        signal["bucket_limit"] = bucket_limit
         signals.append(signal)
         self.path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True, len(same_day) + 1
+        return True, len(same_day) + 1, len(same_bucket) + 1, bucket_limit, bucket_name, "recorded"
 
     def today_count(self, code: str, trade_day: str) -> int:
         state = self._load()
@@ -457,9 +480,27 @@ class ModelSignalEngine:
             volume_ratio=volume_ratio,
             action=action,
         )
-        is_new, count = self.store.record_if_new(signal, model.max_daily_signals, model.min_signal_gap_minutes)
+        is_new, count, bucket_count, bucket_limit, bucket_name, reject_reason = self.store.record_if_new(
+            signal,
+            model.max_daily_signals,
+            model.min_signal_gap_minutes,
+        )
         signal["is_new"] = is_new
         signal["daily_count"] = count
+        signal["time_bucket"] = bucket_name
+        signal["bucket_count"] = bucket_count
+        signal["bucket_limit"] = bucket_limit
+        signal["reject_reason"] = reject_reason
+        if not is_new:
+            if reject_reason == "bucket_limit":
+                signal["message"] = (
+                    f"{bucket_name}做T提醒名额已用完（{bucket_count}/{bucket_limit}），"
+                    "保留其他时段名额，当前只观察不推送。"
+                )
+            elif reject_reason == "daily_limit":
+                signal["message"] = "达到每日做T提醒总上限，后续只观察不推送。"
+            elif reject_reason == "min_gap":
+                signal["message"] = f"距离同方向上一条信号不足 {model.min_signal_gap_minutes} 分钟，只观察不推送。"
         return signal
 
     def _entry_window(self, minute: str) -> str | None:
@@ -687,6 +728,22 @@ def _float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _signal_time_bucket(minute: str) -> str:
+    for name, start, end in SIGNAL_TIME_BUCKETS:
+        if start <= minute <= end:
+            return name
+    return "其他"
+
+
+def _daily_bucket_limits(max_daily_signals: int) -> dict[str, int]:
+    total = max(1, int(max_daily_signals or 1))
+    if total == 1:
+        return {"上午": 1, "下午": 1, "其他": 1}
+    afternoon = max(1, total // 2)
+    morning = max(1, total - afternoon)
+    return {"上午": morning, "下午": afternoon, "其他": total}
 
 
 def _minute_to_int(minute: str) -> int | None:
