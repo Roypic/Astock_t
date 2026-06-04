@@ -1601,6 +1601,7 @@ class MonitorApp:
         levels = self._chart_levels(rows)
         order_book = self._fetch_order_book(code)
         levels["fund_behavior"] = self._fund_behavior_analysis(rows, levels, order_book, period)
+        levels["trade_advice"] = self._intraday_trade_advice(rows, levels, order_book, period)
         info = self._fetch_security_info(code)
         name = str(info.get("symbol_name") or query)
         return {"query": query, "name": name, "code": code, "period": period, "rows": rows, "levels": levels, "order_book": order_book}
@@ -1895,6 +1896,17 @@ class MonitorApp:
                 fill="#B9D7F5",
                 font=("Microsoft YaHei UI", 9),
             )
+        advice = levels.get("trade_advice")
+        if isinstance(advice, dict) and advice.get("title"):
+            color = COLORS["coral"] if str(advice.get("bias")) == "bullish" else COLORS["green"] if str(advice.get("bias")) == "bearish" else "#F2C166"
+            canvas.create_text(
+                pad_left,
+                56,
+                text=f"盘中建议｜{advice.get('title')}｜{advice.get('action', '-')}",
+                anchor=tk.W,
+                fill=color,
+                font=("Microsoft YaHei UI", 9, "bold"),
+            )
         canvas.create_text(pad_left, height - 18, text=str(rows[0].get("label") or ""), anchor=tk.W, fill="#92A9C4", font=("Microsoft YaHei UI", 8))
         canvas.create_text(width - pad_right, height - 18, text=str(rows[-1].get("label") or ""), anchor=tk.E, fill="#92A9C4", font=("Microsoft YaHei UI", 8))
 
@@ -1928,14 +1940,178 @@ class MonitorApp:
         order_text = self._order_book_summary_text(order_book)
         behavior = levels.get("fund_behavior") if isinstance(levels.get("fund_behavior"), dict) else {}
         behavior_text = self._fund_behavior_summary_text(behavior)
+        advice = levels.get("trade_advice") if isinstance(levels.get("trade_advice"), dict) else {}
+        advice_text = self._trade_advice_summary_text(advice)
         return (
             f"{payload.get('name')}（{payload.get('code')}）{payload.get('period')}，样本 {len(rows)} 条。\n"
+            f"{advice_text}\n"
             f"现价/最新：{current:.2f}；支撑位：{support:.2f}（距现价 {support_gap:.1f}%）；压力位：{resistance:.2f}（上方空间 {resistance_gap:.1f}%）；筹码峰：{chip_peak:.2f}。\n"
             f"多级支撑：{self._fmt_price_list(supports)}；多级压力：{self._fmt_price_list(resistances)}。\n"
             f"筹码密集区：{chip_text or '样本不足'}；均线趋势：{levels.get('trend', '未知')}，{ma_text}；量价状态：{volume_note}（量能比 {volume_ratio:.2f}）。\n"
             f"{behavior_text}\n"
             f"{order_text}\n"
             "说明：支撑/压力来自近段高低价分位，筹码区来自成交量加权价格分布；资金行为是基于量价/VSA/五档委比的推断，不是真实账户分类或Level-2逐笔结论。"
+        )
+
+    def _intraday_trade_advice(
+        self,
+        rows: list[dict[str, float | str]],
+        levels: dict[str, object],
+        order_book: dict[str, object],
+        period: str,
+    ) -> dict[str, object]:
+        closes = [float(row["close"]) for row in rows if "close" in row]
+        if len(closes) < 8:
+            return {
+                "title": "样本不足",
+                "bias": "neutral",
+                "action": "先观察",
+                "confidence": 20,
+                "entry_zone": "-",
+                "exit_zone": "-",
+                "invalid": "等分时数据补足后再判断。",
+                "reasons": ["走势样本太少，暂不生成买卖建议。"],
+            }
+        current = closes[-1]
+        start = closes[0]
+        day_return = current / start - 1 if start else 0.0
+        recent = closes[-min(20, len(closes)) :]
+        recent_return = current / recent[0] - 1 if recent[0] else 0.0
+        support = self._safe_float(levels.get("support")) or min(recent)
+        resistance = self._safe_float(levels.get("resistance")) or max(recent)
+        chip_peak = self._safe_float(levels.get("chip_peak")) or current
+        ma5 = self._safe_float(levels.get("ma5"))
+        ma10 = self._safe_float(levels.get("ma10"))
+        ma20 = self._safe_float(levels.get("ma20"))
+        volume_ratio = float(levels.get("volume_ratio") or 1.0)
+        behavior = levels.get("fund_behavior") if isinstance(levels.get("fund_behavior"), dict) else {}
+        scores = behavior.get("scores") if isinstance(behavior.get("scores"), dict) else {}
+        metrics = behavior.get("metrics") if isinstance(behavior.get("metrics"), dict) else {}
+        accumulation = self._safe_float(scores.get("承接/吸筹")) or 0.0
+        wash = self._safe_float(scores.get("洗盘")) or 0.0
+        distribution = self._safe_float(scores.get("出货")) or 0.0
+        no_bid = self._safe_float(scores.get("无承接")) or 0.0
+        quant = self._safe_float(scores.get("量化扰动")) or 0.0
+        sell_volume_share = (self._safe_float(metrics.get("sell_volume_share_pct")) or 0.0) / 100.0
+        imbalance = self._safe_float(order_book.get("imbalance")) if isinstance(order_book, dict) else None
+        imbalance = imbalance if imbalance is not None else 0.0
+
+        highs = [float(row.get("high") or row["close"]) for row in rows[-min(20, len(rows)) :]]
+        lows = [float(row.get("low") or row["close"]) for row in rows[-min(20, len(rows)) :]]
+        recent_high = max(highs)
+        recent_low = min(lows)
+        recent_range = max(recent_high - recent_low, current * 0.002)
+        close_position = (current - recent_low) / recent_range
+        near_support = current <= support * 1.015 or abs(current / chip_peak - 1) <= 0.012
+        near_resistance = current >= resistance * 0.985
+        resistance_gap = resistance / current - 1 if current else 0.0
+        broke_support = current < support * 0.995
+        above_ma = all(current >= value for value in (ma5, ma10) if value)
+        below_ma = all(current <= value for value in (ma5, ma10) if value)
+
+        bullish = 0.0
+        bearish = 0.0
+        reasons: list[str] = []
+        if accumulation >= 55 or wash >= 58:
+            bullish += 2.0
+            reasons.append("承接/洗盘分数较高，低位有资金接回迹象")
+        if distribution >= 55 or no_bid >= 55:
+            bearish += 2.2
+            reasons.append("出货/无承接分数较高，反抽容易被卖压压住")
+        if near_support and close_position >= 0.45:
+            bullish += 1.2
+            reasons.append("价格靠近支撑或筹码峰但没有明显破位")
+        if near_resistance and close_position <= 0.45 and volume_ratio >= 1.05:
+            bearish += 1.4
+            reasons.append("靠近压力区且放量滞涨，适合优先考虑卖T")
+        if near_resistance and resistance_gap <= 0.004 and (sell_volume_share >= 0.55 or distribution >= 32 or no_bid >= 32):
+            bearish += 1.3
+            reasons.append("上方压力空间很窄且卖量偏重，追买性价比下降")
+        if broke_support:
+            bearish += 1.8
+            reasons.append("价格弱破支撑，低吸需要等重新站回支撑")
+        if above_ma and recent_return >= -0.003:
+            bullish += 0.8
+            reasons.append("价格仍在短均线上方，短线结构未坏")
+        if below_ma and recent_return < 0:
+            bearish += 0.9
+            reasons.append("价格位于短均线下方，分时承接偏弱")
+        if imbalance >= 0.18:
+            bullish += 0.7
+            reasons.append("五档买盘暂时占优")
+        elif imbalance <= -0.18:
+            bearish += 0.7
+            reasons.append("五档卖盘暂时占优")
+        if quant >= 60:
+            reasons.append("短线反复切换较多，可能有程序化扰动，挂单要保守")
+
+        confidence = self._score_clip(45 + abs(bullish - bearish) * 12 + min(12, abs(day_return) * 220))
+        buy_zone_low = min(support, chip_peak) * 0.998
+        buy_zone_high = max(support, chip_peak) * 1.006
+        sell_zone_low = min(resistance, max(current, resistance * 0.992))
+        sell_zone_high = resistance * 1.008
+
+        if bearish - bullish >= 1.2:
+            title = "承接乏力，短线偏谨慎"
+            bias = "bearish"
+            action = "已有T仓优先逢反抽卖出；不追买，等重新放量站回均价/支撑"
+            entry_zone = f"反抽卖T：{max(current, resistance * 0.985):.2f}-{sell_zone_high:.2f}"
+            exit_zone = f"回补观察：{buy_zone_low:.2f}-{buy_zone_high:.2f}"
+            invalid = f"若放量站回 {max(chip_peak, support):.2f} 且卖压下降，谨慎信号失效。"
+        elif bullish - bearish >= 1.0:
+            title = "有承接，短线偏可做正T"
+            bias = "bullish"
+            action = "靠近支撑/筹码峰可低吸T仓，冲到压力区分批卖出"
+            if near_resistance and resistance_gap <= 0.004:
+                title = "有承接但贴近压力"
+                action = "不追买；已有T仓可先在压力区分批卖出，等回踩支撑再低吸"
+            entry_zone = f"低吸区：{buy_zone_low:.2f}-{buy_zone_high:.2f}"
+            exit_zone = f"卖出区：{sell_zone_low:.2f}-{sell_zone_high:.2f}"
+            invalid = f"若跌破 {support * 0.995:.2f} 且不能快速收回，正T建议失效。"
+        else:
+            title = "方向不明，先小仓或观望"
+            bias = "neutral"
+            action = "只在支撑附近低吸或压力附近卖T，中间位置不主动追"
+            entry_zone = f"低吸观察：{buy_zone_low:.2f}-{buy_zone_high:.2f}"
+            exit_zone = f"压力观察：{sell_zone_low:.2f}-{sell_zone_high:.2f}"
+            invalid = "若放量突破压力则转强；若跌破支撑则转弱。"
+
+        return {
+            "title": title,
+            "bias": bias,
+            "action": action,
+            "confidence": confidence,
+            "entry_zone": entry_zone,
+            "exit_zone": exit_zone,
+            "invalid": invalid,
+            "reasons": reasons[:5] or ["量价结构暂时没有明显单边信号。"],
+            "scores": {
+                "bullish": round(bullish, 2),
+                "bearish": round(bearish, 2),
+                "accumulation": accumulation,
+                "distribution": distribution,
+                "no_bid": no_bid,
+            },
+            "metrics": {
+                "day_return_pct": round(day_return * 100, 2),
+                "recent_return_pct": round(recent_return * 100, 2),
+                "close_position_pct": round(close_position * 100, 1),
+                "volume_ratio": round(volume_ratio, 2),
+                "imbalance_pct": round(imbalance * 100, 1),
+            },
+        }
+
+    def _trade_advice_summary_text(self, advice: dict[str, object]) -> str:
+        if not advice:
+            return "盘中买卖建议：暂未生成。"
+        reasons = advice.get("reasons") if isinstance(advice.get("reasons"), list) else []
+        reason_text = "；".join(str(item).rstrip("。；; ") for item in reasons[:4])
+        return (
+            f"盘中买卖建议：{advice.get('title', '-')}（置信 {advice.get('confidence', '-')}/100）。\n"
+            f"- 动作：{advice.get('action', '-')}\n"
+            f"- 参考区间：{advice.get('entry_zone', '-')}；{advice.get('exit_zone', '-')}\n"
+            f"- 失效条件：{advice.get('invalid', '-')}\n"
+            f"- 理由：{reason_text or '-'}。"
         )
 
     def _fund_behavior_analysis(
