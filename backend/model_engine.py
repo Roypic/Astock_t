@@ -193,6 +193,17 @@ class SignalStore:
             if s.get("code") == code and s.get("trade_day") == trade_day
         )
 
+    def signals_for_day(self, trade_day: str, codes: set[str] | None = None) -> list[dict[str, Any]]:
+        state = self._load()
+        rows = []
+        for signal in state.get("signals", []):
+            if signal.get("trade_day") != trade_day:
+                continue
+            if codes is not None and signal.get("code") not in codes:
+                continue
+            rows.append(signal)
+        return sorted(rows, key=lambda item: (str(item.get("code", "")), str(item.get("minute", ""))))
+
 
 class ModelSignalEngine:
     def __init__(
@@ -231,6 +242,127 @@ class ModelSignalEngine:
             "items": items,
             "alerts": alerts,
         }
+
+    def build_daily_battle_report(self, trade_day: str | None = None) -> dict[str, Any]:
+        day = trade_day or datetime.now(BEIJING_TZ).strftime("%Y-%m-%d")
+        model_codes = {model.code for model in self.models}
+        signals = self.store.signals_for_day(day, model_codes)
+        now = datetime.now(BEIJING_TZ)
+        lines = [
+            f"做T盘后战报（北京时间 {now.strftime('%Y-%m-%d %H:%M')}）",
+            f"交易日：{day}",
+            "口径：只回看已推送信号之后，当日分时是否触达目标2/参考风控；不代表真实成交、滑点或手续费。",
+            "",
+        ]
+        if not signals:
+            lines.append("今日自选模型没有记录到做T信号。")
+            return {
+                "trade_day": day,
+                "total": 0,
+                "success": 0,
+                "success_rate_pct": 0.0,
+                "content": "\n".join(lines),
+                "summary": f"{day} 无做T信号",
+            }
+
+        evaluations = [self._evaluate_signal(signal) for signal in signals]
+        success = sum(1 for item in evaluations if item["success"])
+        stopped = sum(1 for item in evaluations if item["stopped"])
+        pending = sum(1 for item in evaluations if item["outcome"] == "数据不足")
+        total = len(evaluations)
+        valid = total - pending
+        avg_result = (
+            sum(float(item["result_pct"]) for item in evaluations if item["outcome"] != "数据不足") / valid
+            if valid > 0
+            else 0.0
+        )
+        success_rate = success / valid * 100 if valid > 0 else 0.0
+        lines.extend(
+            [
+                f"总信号：{total} 个；有效回看：{valid} 个；目标2触达：{success} 个；先触风控：{stopped} 个。",
+                f"粗略成功率：{success_rate:.2f}%；粗略单次均值：{avg_result:.2f}%。",
+                "",
+                "逐笔回看：",
+            ]
+        )
+        for item in evaluations:
+            lines.append(
+                f"- {item['symbol']} {item['minute']} {item['side']}：入场 {item['entry_price']}，"
+                f"目标2 {item['target_price']}，风控 {item['stop_price']}，收盘 {item['close_price']}，"
+                f"结果 {item['outcome']}，估算 {item['result_pct']:.2f}%"
+            )
+        lines.extend(
+            [
+                "",
+                "提醒：这是战后复盘，不是收益确认；如果你没有按信号成交、目标价没挂到、或中途手动处理，实际结果会不同。",
+            ]
+        )
+        return {
+            "trade_day": day,
+            "total": total,
+            "success": success,
+            "success_rate_pct": round(success_rate, 2),
+            "avg_result_pct": round(avg_result, 2),
+            "content": "\n".join(lines),
+            "summary": f"{day} 信号{total} 成功率{success_rate:.2f}% 均值{avg_result:.2f}%",
+        }
+
+    def _evaluate_signal(self, signal: dict[str, Any]) -> dict[str, Any]:
+        code = str(signal.get("code") or "")
+        day = str(signal.get("trade_day") or "")
+        minute = str(signal.get("minute") or "")
+        action = str(signal.get("action") or "")
+        entry = _float_or_none(signal.get("entry_price"))
+        target = _float_or_none(signal.get("exit_price") or signal.get("target2_price"))
+        stop = _float_or_none(signal.get("stop_price"))
+        base = {
+            "symbol": signal.get("symbol", code),
+            "minute": minute,
+            "side": "正T" if action == "BUY_T" else "倒T" if action == "SELL_T" else action,
+            "entry_price": entry or "-",
+            "target_price": target or "-",
+            "stop_price": stop or "-",
+            "close_price": "-",
+            "success": False,
+            "stopped": False,
+            "outcome": "数据不足",
+            "result_pct": 0.0,
+        }
+        if not code or not day or not minute or entry is None or target is None or stop is None:
+            return base
+        prices = [row for row in self.client.get_stock_prices(code) if row.day == day and row.minute >= minute]
+        if not prices:
+            return base
+        close = prices[-1].price
+        base["close_price"] = round(close, 3)
+        target_hit_minute = None
+        stop_hit_minute = None
+        for row in prices:
+            if action == "SELL_T":
+                if target_hit_minute is None and row.price <= target:
+                    target_hit_minute = row.minute
+                if stop_hit_minute is None and row.price >= stop:
+                    stop_hit_minute = row.minute
+            else:
+                if target_hit_minute is None and row.price >= target:
+                    target_hit_minute = row.minute
+                if stop_hit_minute is None and row.price <= stop:
+                    stop_hit_minute = row.minute
+            if target_hit_minute and stop_hit_minute:
+                break
+        if target_hit_minute and (not stop_hit_minute or target_hit_minute <= stop_hit_minute):
+            base.update({"success": True, "outcome": f"目标2触达 {target_hit_minute}"})
+            base["result_pct"] = abs(target / entry - 1) * 100
+        elif stop_hit_minute:
+            base.update({"stopped": True, "outcome": f"风控先触 {stop_hit_minute}"})
+            base["result_pct"] = -abs(stop / entry - 1) * 100
+        else:
+            if action == "SELL_T":
+                result = entry / close - 1 if close > 0 else 0.0
+            else:
+                result = close / entry - 1
+            base.update({"outcome": "未触目标/风控，按收盘估算", "result_pct": result * 100})
+        return base
 
     def check_model(self, model: TModel) -> dict[str, Any]:
         own = self.client.get_stock_prices(model.code)
@@ -546,6 +678,15 @@ def _load_model(path: Path) -> TModel:
 
 def _round_or_dash(value: float | None) -> float | str:
     return round(value, 2) if isinstance(value, (int, float)) else "-"
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value in (None, "", "-"):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _minute_to_int(minute: str) -> int | None:

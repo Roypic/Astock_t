@@ -635,6 +635,7 @@ class MonitorApp:
         self.sector_info_cache: dict[str, tuple[float, dict[str, object]]] = {}
         self.concept_board_cache: tuple[float, list[dict[str, object]]] | None = None
         self.news_monitor_started_at: datetime | None = None
+        self.daily_report_sent_day = ""
         self.models_dir = ensure_default_models()
         self.mascot_x = 86
         self.mascot_start_x = 86
@@ -3449,10 +3450,24 @@ class MonitorApp:
             try:
                 result = engine.check_all()
                 self.queue.put(("result", result))
+                now = datetime.now(BEIJING_TZ)
+                day = now.strftime("%Y-%m-%d")
+                if self._should_send_daily_report(now, day):
+                    report = engine.build_daily_battle_report(day)
+                    engine.notifier.send_text(str(report["content"]), title=f"做T盘后战报：{day}")
+                    self.daily_report_sent_day = day
+                    self.queue.put(("log", f"盘后战报已推送：{report['summary']}"))
             except Exception as exc:
                 self.queue.put(("log", f"检查失败：{exc}"))
             self.stop_event.wait(interval)
         self.queue.put(("stopped", None))
+
+    def _should_send_daily_report(self, now: datetime, day: str) -> bool:
+        if self.daily_report_sent_day == day:
+            return False
+        if now.weekday() >= 5:
+            return False
+        return now.strftime("%H:%M") >= "15:05"
 
     def _run_intraday_news_worker(self, token: str, weixin_mode: str) -> None:
         notifier = self._build_alert_notifier(token, weixin_mode)

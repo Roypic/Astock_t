@@ -342,6 +342,7 @@ class MonitorWindow(QMainWindow):
         self.sector_info_cache: dict[str, tuple[float, dict[str, object]]] = {}
         self.concept_board_cache: tuple[float, list[dict[str, object]]] | None = None
         self.news_monitor_started_at = None
+        self.daily_report_sent_day = ""
         self.child_windows: list[QWidget] = []
         self.models_dir = ensure_default_models()
 
@@ -844,12 +845,26 @@ class MonitorWindow(QMainWindow):
             while not self.stop_event.is_set():
                 result = engine.check_all()
                 self.queue.put(("result", result))
+                now = datetime.now(BEIJING_TZ)
+                day = now.strftime("%Y-%m-%d")
+                if self._should_send_daily_report(now, day):
+                    report = engine.build_daily_battle_report(day)
+                    engine.notifier.send_text(str(report["content"]), title=f"做T盘后战报：{day}")
+                    self.daily_report_sent_day = day
+                    self.queue.put(("log", f"盘后战报已推送：{report['summary']}"))
                 for _ in range(interval):
                     if self.stop_event.is_set():
                         break
                     time.sleep(1)
         except Exception as exc:
             self.queue.put(("error", str(exc)))
+
+    def _should_send_daily_report(self, now: datetime, day: str) -> bool:
+        if self.daily_report_sent_day == day:
+            return False
+        if now.weekday() >= 5:
+            return False
+        return now.strftime("%H:%M") >= "15:05"
 
     def _test_push(self) -> None:
         token = self.token.text().strip()
