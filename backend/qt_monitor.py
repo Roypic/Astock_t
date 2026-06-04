@@ -1039,6 +1039,52 @@ class MonitorWindow(QMainWindow):
         dialog.show()
         self.child_windows.append(dialog)
 
+    def _open_fund_dca_window(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("场内基金定投择时")
+        dialog.resize(920, 680)
+        layout = QVBoxLayout(dialog)
+        bar = QHBoxLayout()
+        query = QLineEdit("通信ETF")
+        amount = QLineEdit("1000")
+        amount.setFixedWidth(96)
+        strategy = QComboBox()
+        strategy.addItems(["均线温度", "逢跌增强", "网格低吸", "稳健定投", "动量暂停"])
+        run = ModernButton("计算", "primary")
+        bar.addWidget(QLabel("场内基金"))
+        bar.addWidget(query, 1)
+        bar.addWidget(QLabel("基础金额"))
+        bar.addWidget(amount)
+        bar.addWidget(QLabel("策略"))
+        bar.addWidget(strategy)
+        bar.addWidget(run)
+        layout.addLayout(bar)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText("输入场内 ETF/基金代码或简称，选择策略后计算。")
+        layout.addWidget(text)
+
+        def execute() -> None:
+            q = query.text().strip()
+            if not q:
+                QMessageBox.warning(dialog, "缺少基金", "请输入场内基金/ETF代码或简称。")
+                return
+            text.setPlainText("正在读取场内基金分时和日线...")
+
+            def worker() -> None:
+                try:
+                    content = self._build_intraday_etf_dca_report(q, amount.text().strip(), strategy.currentText())
+                    self.queue.put(("set_text", (text, content)))
+                except Exception as exc:
+                    self.queue.put(("set_text", (text, f"定投择时失败：{exc}")))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        run.clicked.connect(execute)
+        query.returnPressed.connect(execute)
+        dialog.show()
+        self.child_windows.append(dialog)
+
     def _open_query_window(
         self,
         title: str,

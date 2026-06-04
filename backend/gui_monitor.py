@@ -256,6 +256,53 @@ STOCK_CODE_HINTS = {
     "兴业银锡": "000426.SZ",
     "兴业银": "000426.SZ",
 }
+DCA_STRATEGIES = {
+    "均线温度": {
+        "description": "默认策略。按 MA20/MA60、近5/20日涨跌和日内位置调节金额，适合长期定投。",
+        "temperature_weight": 1.0,
+        "dip_weight": 1.0,
+        "intraday_weight": 1.0,
+        "chase_penalty": 1.0,
+        "min_multiplier": 0.2,
+        "max_multiplier": 2.0,
+    },
+    "逢跌增强": {
+        "description": "越跌越买，适合你明确长期看好的宽基/行业 ETF；高位仍会自动少买。",
+        "temperature_weight": 0.9,
+        "dip_weight": 1.45,
+        "intraday_weight": 1.15,
+        "chase_penalty": 0.85,
+        "min_multiplier": 0.3,
+        "max_multiplier": 2.5,
+    },
+    "网格低吸": {
+        "description": "更看重日内低吸位置，接近日内高位会明显少买，适合场内挂单。",
+        "temperature_weight": 0.75,
+        "dip_weight": 1.0,
+        "intraday_weight": 1.65,
+        "chase_penalty": 1.35,
+        "min_multiplier": 0.0,
+        "max_multiplier": 2.2,
+    },
+    "稳健定投": {
+        "description": "金额波动较小，主要避免明显追高，适合不想频繁调整的人。",
+        "temperature_weight": 0.55,
+        "dip_weight": 0.6,
+        "intraday_weight": 0.55,
+        "chase_penalty": 0.65,
+        "min_multiplier": 0.5,
+        "max_multiplier": 1.5,
+    },
+    "动量暂停": {
+        "description": "强势上涨时少追或暂停，等回踩再买；适合波动较大的主题 ETF。",
+        "temperature_weight": 1.15,
+        "dip_weight": 0.85,
+        "intraday_weight": 1.0,
+        "chase_penalty": 1.65,
+        "min_multiplier": 0.0,
+        "max_multiplier": 1.8,
+    },
+}
 RESEARCH_PEERS = {
     "002428.SZ": ("600497.SH", "000060.SZ", "600206.SH", "600362.SH"),
     "603629.SH": ("002463.SZ", "600183.SH", "002916.SZ", "603228.SH", "002938.SZ"),
@@ -1603,6 +1650,7 @@ class MonitorApp:
 
         query_var = tk.StringVar(value="通信ETF")
         amount_var = tk.StringVar(value="1000")
+        strategy_var = tk.StringVar(value="均线温度")
         status_var = tk.StringVar(value="输入场内 ETF/基金代码或简称，按盘中价格给定投择时建议。")
 
         ttk.Label(panel, text="场内基金", style="Muted.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 10))
@@ -1610,6 +1658,9 @@ class MonitorApp:
         entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 10))
         ttk.Label(panel, text="基础金额", style="Muted.TLabel").grid(row=0, column=2, sticky=tk.E, padx=(0, 8))
         ttk.Entry(panel, textvariable=amount_var, width=10).grid(row=0, column=3, sticky=tk.W, padx=(0, 10))
+        ttk.Label(panel, text="策略", style="Muted.TLabel").grid(row=1, column=0, sticky=tk.W, padx=(0, 10), pady=(10, 0))
+        strategy_box = ttk.Combobox(panel, textvariable=strategy_var, values=tuple(DCA_STRATEGIES), width=14, state="readonly")
+        strategy_box.grid(row=1, column=1, sticky=tk.W, padx=(0, 10), pady=(10, 0))
 
         result = tk.Text(
             window,
@@ -1644,14 +1695,14 @@ class MonitorApp:
 
             def worker() -> None:
                 try:
-                    content = self._build_intraday_etf_dca_report(query, amount_var.get().strip())
+                    content = self._build_intraday_etf_dca_report(query, amount_var.get().strip(), strategy_var.get().strip())
                     self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": content}))
                 except Exception as exc:
                     self.queue.put(("custom_info_result", {"text": result, "status": status_var, "content": f"定投择时失败：{exc}"}))
 
             threading.Thread(target=worker, daemon=True).start()
 
-        ttk.Button(panel, text="计算", style="Primary.TButton", command=run_dca).grid(row=0, column=4, sticky=tk.E)
+        ttk.Button(panel, text="计算", style="Primary.TButton", command=run_dca).grid(row=0, column=4, rowspan=2, sticky=tk.E)
         entry.bind("<Return>", lambda _event: run_dca())
         entry.focus_set()
 
@@ -1672,7 +1723,7 @@ class MonitorApp:
         name = str(info.get("symbol_name") or query)
         return {"query": query, "name": name, "code": code, "period": period, "rows": rows, "levels": levels, "order_book": order_book}
 
-    def _build_intraday_etf_dca_report(self, query: str, amount_text: str = "") -> str:
+    def _build_intraday_etf_dca_report(self, query: str, amount_text: str = "", strategy_name: str = "均线温度") -> str:
         code = self._resolve_stock_code(query)
         if not code:
             raise RuntimeError("没有识别到场内基金代码，请输入 6 位代码或已内置的 ETF 简称。")
@@ -1683,6 +1734,12 @@ class MonitorApp:
             base_amount = max(0.0, float(amount_text or 1000))
         except ValueError:
             base_amount = 1000.0
+        strategy_name = strategy_name if strategy_name in DCA_STRATEGIES else "均线温度"
+        strategy = DCA_STRATEGIES[strategy_name]
+        temperature_weight = float(strategy["temperature_weight"])
+        dip_weight = float(strategy["dip_weight"])
+        intraday_weight = float(strategy["intraday_weight"])
+        chase_penalty = float(strategy["chase_penalty"])
 
         client = MarketClient(ttl_seconds=20)
         prices = client.get_stock_prices(ft_code)
@@ -1736,37 +1793,37 @@ class MonitorApp:
         multiplier = 1.0
         reasons: list[str] = []
         if temperature <= 25:
-            multiplier += 0.8
-            reasons.append("中期温度偏冷，适合增强定投")
+            multiplier += 0.8 * temperature_weight * dip_weight
+            reasons.append("中期温度偏冷，策略允许增强定投")
         elif temperature <= 40:
-            multiplier += 0.35
+            multiplier += 0.35 * temperature_weight * dip_weight
             reasons.append("中期温度偏低，可略微加大买入")
         elif temperature >= 78:
-            multiplier -= 0.65
+            multiplier -= 0.65 * temperature_weight * chase_penalty
             reasons.append("中期温度偏热，长期定投不宜追高")
         elif temperature >= 65:
-            multiplier -= 0.35
+            multiplier -= 0.35 * temperature_weight * chase_penalty
             reasons.append("中期温度偏高，建议减半或等回落")
 
         if day_position <= 0.25 and avg_gap <= 0:
-            multiplier += 0.35
+            multiplier += 0.35 * intraday_weight * dip_weight
             reasons.append("当前接近日内低位且低于均价，盘中价格相对友好")
         elif day_position >= 0.78 and avg_gap > 0:
-            multiplier -= 0.45
+            multiplier -= 0.45 * intraday_weight * chase_penalty
             reasons.append("当前接近日内高位且高于均价，容易买在日内偏贵区")
         if support_gap <= 0.006:
-            multiplier += 0.20
+            multiplier += 0.20 * intraday_weight
             reasons.append("现价靠近日内支撑，适合分批挂低吸")
         if resistance_gap <= 0.006 and day_position >= 0.65:
-            multiplier -= 0.25
+            multiplier -= 0.25 * intraday_weight * chase_penalty
             reasons.append("现价靠近日内压力，上方空间较窄")
         if volume_ratio >= 1.6 and day_return < 0 and day_position <= 0.45:
-            multiplier += 0.20
+            multiplier += 0.20 * dip_weight
             reasons.append("放量下跌但未处在最低位，可能已有承接")
         if volume_ratio >= 1.6 and day_return > 0 and day_position >= 0.75:
-            multiplier -= 0.25
+            multiplier -= 0.25 * chase_penalty
             reasons.append("放量上涨且处在高位，追价风险较高")
-        multiplier = max(0.0, min(2.0, multiplier))
+        multiplier = max(float(strategy["min_multiplier"]), min(float(strategy["max_multiplier"]), multiplier))
 
         suggested_amount = base_amount * multiplier
         buy_low = min(support, avg_price, current) * 0.998
@@ -1801,6 +1858,7 @@ class MonitorApp:
             [
                 f"场内基金定投择时：{name}（{code}）",
                 f"北京时间 {now.strftime('%Y-%m-%d %H:%M')}；口径：场内 ETF 盘中成交价，不是场外基金净值。",
+                f"内置策略：{strategy_name}｜{strategy['description']}",
                 "",
                 f"今日建议：{action}；建议金额：{amount_display} 元（基础金额 {base_display}，倍率 {multiplier:.2f}x）。",
                 f"执行方式：{timing}",
@@ -1813,6 +1871,13 @@ class MonitorApp:
                 "",
                 "理由：",
                 *(f"- {item}" for item in (reasons or ["盘中价格和中期温度都没有明显极端，按计划定投即可。"])),
+                "",
+                "内置策略怎么选：",
+                "- 均线温度：默认，平衡长期温度和盘中低吸。",
+                "- 逢跌增强：长期看好时用，越跌越买，但不追高。",
+                "- 网格低吸：适合场内挂单，只在日内便宜区多买。",
+                "- 稳健定投：金额波动小，适合省心长期买。",
+                "- 动量暂停：主题ETF过热时少追，等回踩。",
                 "",
                 "长期定投提醒：这个功能只帮你优化场内买入时点和金额倍率，不建议因为一天的波动改变长期资产配置。",
             ]
