@@ -1572,6 +1572,7 @@ class MonitorApp:
             raise RuntimeError("走势数据不足，可能非交易时间或接口暂时无数据。")
         levels = self._chart_levels(rows)
         order_book = self._fetch_order_book(code)
+        levels["fund_behavior"] = self._fund_behavior_analysis(rows, levels, order_book, period)
         info = self._fetch_security_info(code)
         name = str(info.get("symbol_name") or query)
         return {"query": query, "name": name, "code": code, "period": period, "rows": rows, "levels": levels, "order_book": order_book}
@@ -1856,6 +1857,16 @@ class MonitorApp:
         change_color = COLORS["coral"] if current >= prev else COLORS["green"]
         canvas.create_text(pad_left, 20, text=f"{name} {period} 走势｜{trend}", anchor=tk.W, fill="#EAF3FF", font=("Microsoft YaHei UI", 12, "bold"))
         canvas.create_text(width - pad_right, 20, text=f"现价 {current:.2f}", anchor=tk.E, fill=change_color, font=("Microsoft YaHei UI", 12, "bold"))
+        behavior = levels.get("fund_behavior")
+        if isinstance(behavior, dict) and behavior.get("verdict"):
+            canvas.create_text(
+                pad_left,
+                38,
+                text=f"资金推断｜{behavior.get('verdict')}｜置信 {behavior.get('confidence', '-')}/100",
+                anchor=tk.W,
+                fill="#B9D7F5",
+                font=("Microsoft YaHei UI", 9),
+            )
         canvas.create_text(pad_left, height - 18, text=str(rows[0].get("label") or ""), anchor=tk.W, fill="#92A9C4", font=("Microsoft YaHei UI", 8))
         canvas.create_text(width - pad_right, height - 18, text=str(rows[-1].get("label") or ""), anchor=tk.E, fill="#92A9C4", font=("Microsoft YaHei UI", 8))
 
@@ -1887,13 +1898,182 @@ class MonitorApp:
         volume_ratio = float(levels.get("volume_ratio") or 1.0)
         volume_note = "放量" if volume_ratio >= 1.5 else "缩量" if volume_ratio <= 0.7 else "量能平稳"
         order_text = self._order_book_summary_text(order_book)
+        behavior = levels.get("fund_behavior") if isinstance(levels.get("fund_behavior"), dict) else {}
+        behavior_text = self._fund_behavior_summary_text(behavior)
         return (
             f"{payload.get('name')}（{payload.get('code')}）{payload.get('period')}，样本 {len(rows)} 条。\n"
             f"现价/最新：{current:.2f}；支撑位：{support:.2f}（距现价 {support_gap:.1f}%）；压力位：{resistance:.2f}（上方空间 {resistance_gap:.1f}%）；筹码峰：{chip_peak:.2f}。\n"
             f"多级支撑：{self._fmt_price_list(supports)}；多级压力：{self._fmt_price_list(resistances)}。\n"
             f"筹码密集区：{chip_text or '样本不足'}；均线趋势：{levels.get('trend', '未知')}，{ma_text}；量价状态：{volume_note}（量能比 {volume_ratio:.2f}）。\n"
+            f"{behavior_text}\n"
             f"{order_text}\n"
-            "说明：支撑/压力来自近段高低价分位，筹码区来自成交量加权价格分布；盘口只表示公开接口返回的挂单快照，不等于真实成交承诺。"
+            "说明：支撑/压力来自近段高低价分位，筹码区来自成交量加权价格分布；资金行为是基于量价/VSA/五档委比的推断，不是真实账户分类或Level-2逐笔结论。"
+        )
+
+    def _fund_behavior_analysis(
+        self,
+        rows: list[dict[str, float | str]],
+        levels: dict[str, object],
+        order_book: dict[str, object],
+        period: str,
+    ) -> dict[str, object]:
+        closes = [float(row["close"]) for row in rows if "close" in row]
+        if len(closes) < 8:
+            return {"verdict": "样本不足", "confidence": 20, "scores": {}, "evidence": ["走势样本太少，暂不判断资金行为。"]}
+        highs = [float(row.get("high") or row["close"]) for row in rows]
+        lows = [float(row.get("low") or row["close"]) for row in rows]
+        volumes = [max(0.0, float(row.get("volume") or 0)) for row in rows]
+        recent_n = min(20, len(rows))
+        recent_closes = closes[-recent_n:]
+        recent_highs = highs[-recent_n:]
+        recent_lows = lows[-recent_n:]
+        recent_volumes = volumes[-recent_n:]
+        current = closes[-1]
+        start = recent_closes[0]
+        prev = closes[-2]
+        recent_return = current / start - 1 if start else 0.0
+        day_return = current / closes[0] - 1 if closes[0] else 0.0
+        recent_high = max(recent_highs)
+        recent_low = min(recent_lows)
+        recent_range = max(recent_high - recent_low, current * 0.002)
+        close_position = (current - recent_low) / recent_range
+        support = self._safe_float(levels.get("support")) or recent_low
+        resistance = self._safe_float(levels.get("resistance")) or recent_high
+        chip_peak = self._safe_float(levels.get("chip_peak")) or current
+        volume_ratio = float(levels.get("volume_ratio") or 1.0)
+        imbalance = self._safe_float(order_book.get("imbalance")) if isinstance(order_book, dict) else None
+        imbalance = imbalance if imbalance is not None else 0.0
+        up_volume = 0.0
+        down_volume = 0.0
+        reversal_count = 0
+        last_sign = 0
+        high_volume_down = 0
+        high_volume_up = 0
+        avg_volume = sum(recent_volumes) / max(1, len(recent_volumes))
+        for idx in range(max(1, len(closes) - recent_n + 1), len(closes)):
+            change = closes[idx] / closes[idx - 1] - 1 if closes[idx - 1] else 0.0
+            sign = 1 if change > 0 else -1 if change < 0 else 0
+            vol = volumes[idx]
+            if sign > 0:
+                up_volume += vol
+                if vol > avg_volume * 1.4:
+                    high_volume_up += 1
+            elif sign < 0:
+                down_volume += vol
+                if vol > avg_volume * 1.4:
+                    high_volume_down += 1
+            if sign and last_sign and sign != last_sign:
+                reversal_count += 1
+            if sign:
+                last_sign = sign
+        total_directional_volume = up_volume + down_volume or 1.0
+        buy_volume_share = up_volume / total_directional_volume
+        sell_volume_share = down_volume / total_directional_volume
+        volatility = (recent_high - recent_low) / current if current else 0.0
+        net_efficiency = abs(recent_return) / max(0.001, volatility)
+        near_support = current <= support * 1.015 or abs(current / chip_peak - 1) <= 0.012
+        near_resistance = current >= resistance * 0.985
+        broke_support = current < support * 0.995
+        recovered_from_low = close_position >= 0.55 and recent_low <= support * 1.005
+        weak_close = close_position <= 0.35
+        strong_close = close_position >= 0.65
+
+        accumulation = 25
+        wash = 18
+        distribution = 18
+        no_bid = 18
+        quant = 15
+        if near_support and (strong_close or recovered_from_low):
+            accumulation += 22
+            wash += 18
+        if buy_volume_share >= 0.56:
+            accumulation += 16
+        if imbalance >= 0.18:
+            accumulation += 12
+            no_bid -= 8
+        if recent_return > 0 and volume_ratio >= 1.15:
+            accumulation += 10
+        if recent_return < -0.012 and recovered_from_low and volume_ratio >= 1.15:
+            wash += 26
+        if high_volume_down >= 2 and not broke_support and close_position >= 0.45:
+            wash += 16
+        if near_resistance and weak_close and volume_ratio >= 1.1:
+            distribution += 24
+        if sell_volume_share >= 0.58:
+            distribution += 14
+            no_bid += 8
+        if high_volume_down >= 3 and weak_close:
+            distribution += 16
+        if broke_support and recent_return < -0.01:
+            no_bid += 28
+        if imbalance <= -0.18:
+            distribution += 10
+            no_bid += 16
+        if recent_return < -0.015 and volume_ratio < 0.85:
+            no_bid += 14
+        if reversal_count >= recent_n * 0.45 and net_efficiency <= 0.45 and volume_ratio >= 0.9:
+            quant += 32
+        if volatility >= 0.025 and abs(recent_return) <= 0.006 and reversal_count >= recent_n * 0.35:
+            quant += 18
+        if period != "分时" and recent_n >= 20:
+            ma5 = self._safe_float(levels.get("ma5"))
+            ma20 = self._safe_float(levels.get("ma20"))
+            if ma5 and ma20 and current < ma5 < ma20:
+                no_bid += 14
+            if ma5 and ma20 and current > ma5 > ma20:
+                accumulation += 10
+
+        scores = {
+            "承接/吸筹": self._score_clip(accumulation),
+            "洗盘": self._score_clip(wash),
+            "出货": self._score_clip(distribution),
+            "无承接": self._score_clip(no_bid),
+            "量化扰动": self._score_clip(quant),
+        }
+        verdict, top_score = max(scores.items(), key=lambda item: item[1])
+        sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        if len(sorted_scores) > 1 and sorted_scores[0][1] - sorted_scores[1][1] <= 8:
+            verdict = f"{sorted_scores[0][0]}偏{sorted_scores[1][0]}"
+        evidence = [
+            f"近{recent_n}根涨跌 {recent_return * 100:+.2f}%，区间位置 {close_position * 100:.0f}%，量能比 {volume_ratio:.2f}",
+            f"上涨量占比 {buy_volume_share * 100:.0f}%，下跌量占比 {sell_volume_share * 100:.0f}%，五档委比 {imbalance * 100:+.1f}%",
+        ]
+        if near_support:
+            evidence.append("价格靠近支撑/筹码峰，重点看是否有承接。")
+        if near_resistance:
+            evidence.append("价格靠近压力区，若放量滞涨更偏派发。")
+        if broke_support:
+            evidence.append("已弱破支撑，若不能快速收回，容易被判为无承接。")
+        if reversal_count >= recent_n * 0.4:
+            evidence.append(f"短线反向切换 {reversal_count} 次，存在程序化/量化扰动特征。")
+        return {
+            "verdict": verdict,
+            "confidence": self._score_clip(top_score),
+            "scores": scores,
+            "evidence": evidence,
+            "metrics": {
+                "recent_return_pct": round(recent_return * 100, 2),
+                "day_return_pct": round(day_return * 100, 2),
+                "close_position_pct": round(close_position * 100, 1),
+                "buy_volume_share_pct": round(buy_volume_share * 100, 1),
+                "sell_volume_share_pct": round(sell_volume_share * 100, 1),
+                "reversal_count": reversal_count,
+            },
+        }
+
+    def _score_clip(self, value: float) -> int:
+        return int(max(0, min(100, round(value))))
+
+    def _fund_behavior_summary_text(self, behavior: dict[str, object]) -> str:
+        if not behavior:
+            return "资金行为推断：暂未生成。"
+        scores = behavior.get("scores") if isinstance(behavior.get("scores"), dict) else {}
+        score_text = "｜".join(f"{key}{value}" for key, value in scores.items()) if scores else "-"
+        evidence = behavior.get("evidence") if isinstance(behavior.get("evidence"), list) else []
+        evidence_text = "；".join(str(item).rstrip("。；; ") for item in evidence[:4])
+        return (
+            f"资金行为推断：{behavior.get('verdict', '-')}（置信 {behavior.get('confidence', '-')}/100）。"
+            f"分项：{score_text}。证据：{evidence_text or '-'}。"
         )
 
     def _fmt_optional_price(self, value: object) -> str:
