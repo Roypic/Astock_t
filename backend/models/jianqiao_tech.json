@@ -47,14 +47,14 @@
     "mode": "激进日内做T：只评估信号后当日最大可捕捉价差，不评估底仓隔夜走势；正T/倒T均可，一天多点位",
     "trade_count": 150,
     "win_rate_pct": 96.0,
-    "avg_result_pct": 1.38,
-    "sum_result_pct": 206.86,
+    "avg_result_pct": 1.37,
+    "sum_result_pct": 205.45,
     "max_drawdown_pct": 0.0,
     "bad_tail_rate_pct": 0.0,
-    "target_rate_pct": 72.0,
+    "target_rate_pct": 70.67,
     "zero_rate_pct": 4.0,
-    "buy_count": 97,
-    "sell_count": 53,
+    "buy_count": 99,
+    "sell_count": 51,
     "warning": "激进回测只衡量日内做T价差机会，不代表实际成交、滑点、挂单成功率或底仓盈亏；请小心使用。"
   }
 }
