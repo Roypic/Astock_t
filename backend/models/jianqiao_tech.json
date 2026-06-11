@@ -39,7 +39,7 @@
     "volume_ratio_threshold": 0.0,
     "trade_sides": "both",
     "strategy_mode": "intraday_aggressive",
-    "min_signal_score": 1.2,
+    "min_signal_score": 2.0,
     "min_signal_gap_minutes": 10
   },
   "backtest": {
@@ -47,11 +47,11 @@
     "mode": "激进日内做T：只评估信号后当日最大可捕捉价差，不评估底仓隔夜走势；正T/倒T均可，一天多点位",
     "trade_count": 150,
     "win_rate_pct": 96.0,
-    "avg_result_pct": 1.37,
-    "sum_result_pct": 205.45,
+    "avg_result_pct": 1.38,
+    "sum_result_pct": 206.43,
     "max_drawdown_pct": 0.0,
     "bad_tail_rate_pct": 0.0,
-    "target_rate_pct": 70.67,
+    "target_rate_pct": 72.0,
     "zero_rate_pct": 4.0,
     "buy_count": 99,
     "sell_count": 51,
