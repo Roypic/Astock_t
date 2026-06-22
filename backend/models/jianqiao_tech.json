@@ -48,13 +48,13 @@
     "trade_count": 150,
     "win_rate_pct": 95.33,
     "avg_result_pct": 1.36,
-    "sum_result_pct": 203.32,
+    "sum_result_pct": 204.48,
     "max_drawdown_pct": 0.0,
     "bad_tail_rate_pct": 0.0,
-    "target_rate_pct": 72.67,
+    "target_rate_pct": 73.33,
     "zero_rate_pct": 4.67,
-    "buy_count": 87,
-    "sell_count": 63,
+    "buy_count": 84,
+    "sell_count": 66,
     "warning": "激进回测只衡量日内做T价差机会，不代表实际成交、滑点、挂单成功率或底仓盈亏；请小心使用。"
   }
 }
